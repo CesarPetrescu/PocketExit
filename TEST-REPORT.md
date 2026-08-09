@@ -18,6 +18,12 @@ The following checks were executed in the delivery environment:
 - backend process-level HTTP/control-plane smoke test;
 - JavaScript syntax validation with `node --check`;
 - Compose YAML parsing and topology assertions;
+- Android Gradle unit tests, lint, and debug APK compilation;
+- API 36 emulator installation, notification permission, UI launch, network
+  detection, foreground service startup, and public heartbeat registration;
+- Docker image construction and live Compose health checks;
+- public SparkTunnel dashboard, health, authenticated heartbeat, and admin
+  readback checks at `https://exit.photonspark.ro`;
 - Android XML parsing;
 - shell syntax validation;
 - source-policy scan for `VpnService`, process-wide binding, and root-shell use;
@@ -60,6 +66,10 @@ The included GitHub Actions workflow additionally performs:
 
 ## Environment limitations
 
-The delivery environment did not contain Docker Engine, Gradle, or an Android SDK. Consequently, Docker image construction and Android APK compilation could not be executed locally. They are represented by reproducible source, verified wrapper checksums, static validation, and CI jobs, but remain to be run on a machine with those toolchains.
+SparkTunnel successfully carries the dashboard, API, heartbeat, and control
+requests, but its plain HTTP path closes/buffers PocketExit's long-lived circuit
+body streams. The live SOCKS-over-emulator probe therefore opened an Android
+circuit but could not complete TLS data transfer. Direct Nginx exposure remains
+required for TCP/UDP circuits until the agent data protocol supports WebSockets.
 
 No physical-phone LTE/5G throughput or handover test was possible in this environment. Real-device validation should cover Wi-Fi-to-cellular control reconnection, cellular-only public IP confirmation, OEM background-process behavior, and carrier-specific NAT/IPv6 conditions.

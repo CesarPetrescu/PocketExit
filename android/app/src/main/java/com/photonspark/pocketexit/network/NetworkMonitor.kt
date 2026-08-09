@@ -6,6 +6,7 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.Build
 import com.photonspark.pocketexit.data.NetworkKind
 import com.photonspark.pocketexit.data.NetworkSnapshot
 import com.photonspark.pocketexit.data.Policy
@@ -143,7 +144,11 @@ class NetworkMonitor(context: Context) {
                     ?.mapNotNull { it.hostAddress }
                     ?.distinct()
                     .orEmpty(),
-                mtu = actualLinkProperties?.mtu ?: 0,
+                mtu = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    actualLinkProperties?.mtu ?: 0
+                } else {
+                    0
+                },
                 downKbps = actualCapabilities?.linkDownstreamBandwidthKbps ?: 0,
                 upKbps = actualCapabilities?.linkUpstreamBandwidthKbps ?: 0,
             )

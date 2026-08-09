@@ -130,6 +130,20 @@ Start the services:
 docker compose up --build -d
 ```
 
+For a PhotonSpark-hosted HTTP endpoint, add the one-time connector token to
+`.env` as `SPARK_TUNNEL_TOKEN`. The included connector publishes the dashboard,
+API, and Android heartbeat/control traffic through `https://exit.photonspark.ro`
+without an inbound firewall rule. SparkTunnel does not carry the raw SOCKS5 TCP
+or UDP relay ports, and its HTTP transport does not preserve PocketExit's
+long-lived circuit body streams. Use the direct Nginx host mappings for working
+TCP/UDP circuits until the circuit protocol supports WebSockets.
+
+To run only through SparkTunnel without publishing any host ports:
+
+```bash
+docker compose --profile tunnel -f docker-compose.yml -f docker-compose.tunnel.yml up --build -d
+```
+
 Validate them:
 
 ```bash
