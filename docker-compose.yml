@@ -48,6 +48,32 @@ services:
     networks:
       - internal
 
+  spark-tunnel:
+    profiles:
+      - tunnel
+    build:
+      context: ./spark-tunnel
+      dockerfile: Dockerfile
+    depends_on:
+      nginx:
+        condition: service_healthy
+    command:
+      - run
+      - --server
+      - https://webhost.photonspark.com
+      - --token
+      - ${SPARK_TUNNEL_TOKEN:-missing}
+      - --target
+      - http://nginx:8081
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - internal
+
 networks:
   internal:
     driver: bridge

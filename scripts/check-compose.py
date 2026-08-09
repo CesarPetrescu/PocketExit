@@ -13,13 +13,16 @@ data = yaml.safe_load(path.read_text(encoding="utf-8"))
 services = data.get("services", {})
 errors: list[str] = []
 
-if set(services) != {"backend", "nginx"}:
-    errors.append("Compose must contain exactly the backend and nginx services")
+if set(services) != {"backend", "nginx", "spark-tunnel"}:
+    errors.append("Compose must contain exactly the backend, nginx, and spark-tunnel services")
 
 backend = services.get("backend", {})
 nginx = services.get("nginx", {})
+spark_tunnel = services.get("spark-tunnel", {})
 if backend.get("ports"):
     errors.append("backend must not publish host ports")
+if spark_tunnel.get("ports"):
+    errors.append("spark-tunnel must not publish host ports")
 if not backend.get("expose"):
     errors.append("backend should expose its internal ports")
 if not nginx.get("ports"):
@@ -34,8 +37,8 @@ for name, service in services.items():
     if "no-new-privileges:true" not in service.get("security_opt", []):
         errors.append(f"{name} is missing no-new-privileges")
 
-if not backend.get("read_only") or not nginx.get("read_only"):
-    errors.append("both containers must use read-only root filesystems")
+if any(not service.get("read_only") for service in services.values()):
+    errors.append("all containers must use read-only root filesystems")
 
 if errors:
     print("Compose checks failed:", file=sys.stderr)
