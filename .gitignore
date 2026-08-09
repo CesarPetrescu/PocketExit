@@ -2,6 +2,7 @@
 *.log
 *.zip
 *.sha256
+!android/gradle/wrapper/gradle-wrapper.jar.sha256
 .DS_Store
 .idea/
 .vscode/
