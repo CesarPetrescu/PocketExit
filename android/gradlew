@@ -1,0 +1,36 @@
+#!/bin/sh
+set -eu
+APP_HOME=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+JAR="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
+SUM_FILE="$APP_HOME/gradle/wrapper/gradle-wrapper.jar.sha256"
+URL="https://raw.githubusercontent.com/gradle/gradle/v8.13.0/gradle/wrapper/gradle-wrapper.jar"
+
+verify_jar() {
+  expected=$(tr -d '[:space:]' < "$SUM_FILE")
+  actual=$(sha256sum "$JAR" | awk '{print $1}')
+  [ "$expected" = "$actual" ] || {
+    echo "Gradle wrapper JAR checksum mismatch" >&2
+    rm -f "$JAR"
+    exit 1
+  }
+}
+
+if [ ! -f "$JAR" ]; then
+  echo "Bootstrapping verified Gradle 8.13 wrapper JAR..." >&2
+  tmp="$JAR.tmp"
+  rm -f "$tmp"
+  if command -v curl >/dev/null 2>&1; then
+    curl --fail --location --retry 3 --output "$tmp" "$URL"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -O "$tmp" "$URL"
+  else
+    echo "curl or wget is required for the first wrapper run" >&2
+    exit 1
+  fi
+  mv "$tmp" "$JAR"
+fi
+verify_jar
+
+JAVA_CMD=${JAVA_HOME:+$JAVA_HOME/bin/}java
+exec "$JAVA_CMD" ${JAVA_OPTS:-} ${GRADLE_OPTS:-} -Dorg.gradle.appname=gradlew \
+  -classpath "$JAR" org.gradle.wrapper.GradleWrapperMain "$@"

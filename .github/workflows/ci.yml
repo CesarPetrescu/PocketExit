@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-and-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Core tests
+        run: ./scripts/test.sh
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: yes | sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Verify, lint, and build Android
+        working-directory: android
+        run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pocket-exit-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate configuration
+        run: ./scripts/setup.sh localhost
+      - name: Validate and build
+        run: |
+          docker compose config >/dev/null
+          docker compose build
+      - name: Start and test gateway
+        run: |
+          docker compose up -d
+          for attempt in $(seq 1 60); do
+            if curl -kfsS https://127.0.0.1/api/v1/health >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              docker compose logs
+              exit 1
+            fi
+            sleep 1
+          done
+          docker compose exec -T nginx nginx -t
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs
+      - name: Stop services
+        if: always()
+        run: docker compose down -v

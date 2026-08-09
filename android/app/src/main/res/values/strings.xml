@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Pocket Exit</string>
+    <string name="notification_channel_name">Exit node status</string>
+    <string name="notification_channel_description">Keeps the private exit-node connection active</string>
+</resources>

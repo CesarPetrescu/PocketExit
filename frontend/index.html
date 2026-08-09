@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>PocketExit Control Plane</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">PRIVATE MOBILE EGRESS</p>
+      <h1>PocketExit</h1>
+    </div>
+    <div class="auth-panel">
+      <label for="admin-token">Admin token</label>
+      <div class="auth-row">
+        <input id="admin-token" type="password" autocomplete="off" placeholder="ADMIN_TOKEN">
+        <button id="save-token" class="primary">Connect</button>
+      </div>
+      <span id="connection-state" class="status neutral">Not connected</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="summary-grid" aria-label="System summary">
+      <article class="summary-card"><span>Nodes</span><strong id="node-count">—</strong></article>
+      <article class="summary-card"><span>Online</span><strong id="online-count">—</strong></article>
+      <article class="summary-card"><span>Open circuits</span><strong id="circuit-count">—</strong></article>
+      <article class="summary-card"><span>Total traffic</span><strong id="traffic-total">—</strong></article>
+    </section>
+
+    <section class="section-heading">
+      <div>
+        <p class="eyebrow">EXIT FLEET</p>
+        <h2>Android nodes</h2>
+      </div>
+      <button id="refresh" class="secondary">Refresh</button>
+    </section>
+    <section id="nodes" class="node-grid">
+      <div class="empty-state">Enter the admin token to load nodes.</div>
+    </section>
+
+    <section class="section-heading circuits-heading">
+      <div>
+        <p class="eyebrow">LIVE DATA PLANE</p>
+        <h2>Circuits</h2>
+      </div>
+      <label class="compact-control">Show
+        <select id="circuit-filter">
+          <option value="active">active</option>
+          <option value="all">all</option>
+        </select>
+      </label>
+    </section>
+    <div class="table-shell">
+      <table>
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Node</th>
+            <th>Protocol</th>
+            <th>Target</th>
+            <th>Exit</th>
+            <th>Traffic</th>
+            <th>Age</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="circuits">
+          <tr><td colspan="8" class="empty-cell">No circuit data.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
