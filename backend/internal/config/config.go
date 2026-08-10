@@ -52,10 +52,10 @@ func Load() (Config, error) {
 	if cfg.NodeOfflineAfter, err = envDuration("NODE_OFFLINE_AFTER", 45*time.Second); err != nil {
 		return Config{}, err
 	}
-	if cfg.CommandWait, err = envDuration("COMMAND_WAIT", 25*time.Second); err != nil {
+	if cfg.CommandWait, err = envDuration("COMMAND_WAIT", 5*time.Second); err != nil {
 		return Config{}, err
 	}
-	if cfg.OpenTimeout, err = envDuration("OPEN_TIMEOUT", 15*time.Second); err != nil {
+	if cfg.OpenTimeout, err = envDuration("OPEN_TIMEOUT", 45*time.Second); err != nil {
 		return Config{}, err
 	}
 	if cfg.IdleTimeout, err = envDuration("IDLE_TIMEOUT", 2*time.Minute); err != nil {
