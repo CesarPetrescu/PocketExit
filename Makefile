@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: setup test test-core test-go test-android test-docker test-live smoke clean package
+.PHONY: setup test test-core test-go test-android android-apk test-docker test-live smoke clean package
 
 setup:
 	./scripts/setup.sh $${DOMAIN:-pocketexit.local}
@@ -16,6 +16,13 @@ test-go:
 
 test-android:
 	cd android && ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
+
+android-apk:
+	docker build -t pocketexit-android-builder android
+	docker run --rm --user "$$(id -u):$$(id -g)" \
+		-e HOME=/tmp -e GRADLE_USER_HOME=/tmp/gradle \
+		-v "$(CURDIR)/android:/workspace" pocketexit-android-builder
+	@echo "APK: android/app/build/outputs/apk/debug/app-debug.apk"
 
 test-docker:
 	docker compose config >/dev/null

@@ -42,8 +42,16 @@ phone needs no root, VPN profile, inbound port, or ADB connection.
    ```
 
 2. [Download the latest APK](https://github.com/CesarPetrescu/PocketExit/releases/latest),
-   install it on each phone, then enter the backend URL, a node ID from
-   `AGENT_TOKENS_JSON`, and that node's token from `.env`. Start the agent.
+   or build it locally with only Docker:
+
+   ```bash
+   make android-apk
+   # → android/app/build/outputs/apk/debug/app-debug.apk
+   ```
+
+   The build container removes itself after the run. Install the APK on each
+   phone, then enter the backend URL, a node ID from `AGENT_TOKENS_JSON`, and
+   that node's token from `.env`. Start the agent.
 
 3. Send traffic through the gateway using `SOCKS_USERNAME` and `SOCKS_PASSWORD`
    from `.env`:
@@ -671,6 +679,25 @@ WebSockets.
 </details>
 
 ### 2. Phones
+
+To build without installing Java, Gradle, or the Android SDK locally:
+
+```bash
+make android-apk
+# Builds one reusable image, removes the build container after the run, and writes:
+# android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+The equivalent direct command is:
+
+```bash
+docker build -t pocketexit-android-builder android
+docker run --rm --user "$(id -u):$(id -g)" \
+  -e HOME=/tmp -e GRADLE_USER_HOME=/tmp/gradle \
+  -v "$PWD/android:/workspace" pocketexit-android-builder
+```
+
+For a native build instead:
 
 ```bash
 cd android
