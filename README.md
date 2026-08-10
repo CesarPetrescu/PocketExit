@@ -503,9 +503,24 @@ The v0.3.0 agent was installed and exercised on all three nodes on 2026-08-10:
 
 | Node | Device | Android network interfaces | Result |
 |---|---|---|---|
-| `s20u` | Galaxy S20 Ultra (`SM-G988B`) | `wlan0` + `rmnet1` | Online; Hetzner range download passed |
-| `s22u` | Galaxy S22 Ultra (`SM-S908B`) | `wlan0` + `rmnet0` | Online; Hetzner range download passed |
-| `s24u` | Galaxy S24 Ultra (`SM-S928B`) | `wlan0` + `rmnet_data0` | Online; Hetzner range download passed |
+| `s20u` | Galaxy S20 Ultra (`SM-G988B`) | `wlan0` + `rmnet1` | Online; browsing, WSS and download passed |
+| `s22u` | Galaxy S22 Ultra (`SM-S908B`) | `wlan0` + `rmnet0` | Online; browsing, WSS and download passed |
+| `s24u` | Galaxy S24 Ultra (`SM-S928B`) | `wlan0` + `rmnet_data0` | Online; browsing, WSS and download passed |
+
+The same live proxy matrix passed through every phone:
+
+| Check | Result on all three nodes |
+|---|---|
+| Wikipedia summary API | Complete HTTPS response |
+| Open-Meteo forecast API | Complete HTTPS JSON response |
+| GitHub raw README | 33,983 bytes |
+| `wss://echo.websocket.org` | HTTP 101 WebSocket upgrade |
+| Concurrent Hetzner range download | 1,048,576 bytes with matching SHA-256 |
+
+The concurrent 1 MiB downloads completed in 7.0 s on `s20u`, 2.6 s on `s22u`,
+and 10.3 s on `s24u`. Those end-to-end times include connection, container and
+circuit setup, so they are health checks rather than throughput benchmarks. All
+three agents remained online and the backend reported no leaked circuits.
 
 The S20 Ultra also ran an explicit forced-cellular public-IP check:
 
@@ -516,7 +531,8 @@ curl --proxy socks5h://proxy.example.com:1080 \
 # [cellular public IPv4 redacted] — the SIM's address, not the Wi-Fi uplink's
 ```
 
-Follow-up transfer probes recorded the current SparkTunnel ceiling:
+Normal browsing and bounded downloads now work. Sustained-body probes still
+record the current SparkTunnel ceiling:
 
 | Probe through `s20u!cellular` | Result | Bytes received | Duration |
 |---|---:|---:|---:|
@@ -525,9 +541,10 @@ Follow-up transfer probes recorded the current SparkTunnel ceiling:
 | Hetzner `1GB.bin` | Stream closed | 474,878 | 17.11 s |
 
 Both large probes received HTTP 200 before SparkTunnel ended the TLS stream with
-an unexpected EOF. This demonstrates phone selection and cellular routing; it is
-**not** a throughput benchmark and claims nothing about large transfers through
-the hosted tunnel. See [TEST-REPORT.md](TEST-REPORT.md).
+an unexpected EOF after about 17 seconds. A full Wikipedia desktop page also
+reproduced this boundary on `s20u`. This demonstrates phone selection and
+cellular routing; it is **not** a throughput benchmark or a claim that large
+transfers work through the hosted tunnel. See [TEST-REPORT.md](TEST-REPORT.md).
 
 ---
 
