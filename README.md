@@ -1,6 +1,23 @@
 # PocketExit
 
-PocketExit turns Android phones you own into selectable private Internet exit nodes. The phones maintain an outbound control/data connection to one public Nginx gateway. A Go backend exposes an authenticated SOCKS5 proxy, selects a phone, and asks the Android agent to open the destination through Wi-Fi or cellular data.
+[![CI](https://github.com/CesarPetrescu/PocketExit/actions/workflows/ci.yml/badge.svg)](https://github.com/CesarPetrescu/PocketExit/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/CesarPetrescu/PocketExit)](https://github.com/CesarPetrescu/PocketExit/releases/latest)
+[![License](https://img.shields.io/github/license/CesarPetrescu/PocketExit)](LICENSE)
+
+PocketExit turns Android phones you own into selectable private Internet exit
+nodes. A client connects to one authenticated SOCKS5 gateway, chooses a phone
+and an exit policy, and the phone opens the destination through Wi-Fi or mobile
+data.
+
+**[Download the latest APK](https://github.com/CesarPetrescu/PocketExit/releases/latest)** ·
+**[Open the live dashboard](https://exit.photonspark.ro)** ·
+**[Read the security checklist](SECURITY.md)**
+
+> [!IMPORTANT]
+> The v0.2.0 APK is debug-signed. SparkTunnel 0.3.0 works for the dashboard,
+> API, phone heartbeats, and short requests, but its HTTP path currently cuts
+> sustained circuit streams after about 16–17 seconds. Use direct Nginx ingress
+> for normal SOCKS5 traffic.
 
 The Android implementation uses ordinary public Android APIs only:
 
@@ -12,33 +29,19 @@ The Android implementation uses ordinary public Android APIs only:
 
 ## Architecture
 
-```text
-SOCKS5 client
-     │ TCP :1080 / UDP relay :12000-12031
-     ▼
-┌──────────────── public Nginx container ────────────────┐
-│  HTTPS + HTTP/2 + HTTP/3/QUIC :443                    │
-│  static dashboard                                     │
-│  API/agent reverse proxy                              │
-│  SOCKS TCP/UDP stream proxy                           │
-└───────────────────────┬────────────────────────────────┘
-                        │ private Docker network
-                        ▼
-                 ┌───────────────┐
-                 │ Go backend    │
-                 │ node registry │
-                 │ circuit mgr   │
-                 │ SOCKS5        │
-                 └───────┬───────┘
-                         │ commands + per-circuit streams
-                         ▼
-                 ┌─────────────────┐
-                 │ Android agent   │
-                 │ control: Wi-Fi  │
-                 │ exit: LTE / 5G  │
-                 └────────┬────────┘
-                          ▼
-                       Internet
+```mermaid
+flowchart LR
+    C[SOCKS5 client] -->|TCP :1080<br/>UDP :12000–12031| N[Nginx gateway]
+    B[Browser dashboard] -->|HTTPS :443| N
+    N -->|private Docker network| G[Go backend<br/>auth · scheduler · circuits]
+    G <-->|commands and circuit streams| A[Android agent]
+    A -->|socket bound to Wi-Fi<br/>or cellular Network| I[Internet destination]
+    S[PhotonSpark edge] -. dashboard/API tunnel .-> N
+
+    classDef phone fill:#123a34,stroke:#7ce4c2,color:#f3f7ff
+    classDef server fill:#172131,stroke:#93a0b5,color:#f3f7ff
+    class A phone
+    class N,G server
 ```
 
 Only `nginx` publishes host ports in `docker-compose.yml`. The Go process is reachable only on the internal Compose network.
@@ -51,6 +54,70 @@ Android → destination socket:             cellular only
 ```
 
 If Wi-Fi disappears, the control connection can reconnect through cellular while destination sockets remain governed by their own exit policy.
+
+### One forced-cellular request
+
+```mermaid
+sequenceDiagram
+    participant C as SOCKS client
+    participant G as Gateway/backend
+    participant P as Android phone
+    participant D as Destination
+    C->>G: CONNECT + proxy@s20u!cellular
+    G->>P: open_tcp(host, port, CELLULAR_ONLY)
+    P->>P: DNS + socket bound to cellular Network
+    P->>D: TCP connection via SIM
+    D-->>P: Response
+    P-->>G: Circuit upload stream
+    G-->>C: SOCKS response bytes
+```
+
+## Verified on a real Galaxy S20 Ultra
+
+On 2026-08-10, a USB-debugged Samsung **SM-G988B** (`s20u`) ran the Android
+agent against the live deployment. Wi-Fi (`wlan0`) carried control traffic and
+cellular (`rmnet1`) was independently validated for exit traffic.
+
+The exact selector used was:
+
+```bash
+curl --proxy socks5h://proxy.example.com:1080 \
+  --proxy-user 'proxy@s20u!cellular:YOUR_SOCKS_PASSWORD' \
+  http://v4.ident.me
+# [cellular public IPv4 redacted]
+```
+
+The returned address matched the phone's cellular egress rather than its Wi-Fi
+connection. Follow-up transfer probes recorded the current SparkTunnel limit:
+
+| Probe through `s20u!cellular` | Result | Bytes received | Duration |
+|---|---:|---:|---:|
+| `v4.ident.me` public-IP check | Passed | Complete response | Short request |
+| Hetzner `100MB.bin` | Stream closed | 1,982,208 bytes | 17.16 s |
+| Hetzner `1GB.bin` | Stream closed | 474,878 bytes | 17.11 s |
+
+Both large probes received HTTP 200 before SparkTunnel ended the TLS stream
+with an unexpected EOF. This proves phone selection and cellular routing work,
+but it is not a throughput benchmark and it does not claim large-transfer
+support through the hosted tunnel.
+
+## Dashboard access
+
+PocketExit has one responsive administration page for fleet status, network
+validation, route policies, battery/traffic telemetry, and active circuits.
+These captures came from the live deployment; tokens, IP addresses, DNS
+servers, circuit IDs, and destinations were removed before the images were
+written. The test phone still had app v0.1.0 installed during capture; the
+current downloadable APK is v0.2.0.
+
+![PocketExit dashboard showing the real Galaxy S20 Ultra online](docs/images/dashboard-desktop.png)
+
+<details>
+<summary>Mobile layout</summary>
+
+![PocketExit dashboard mobile layout](docs/images/dashboard-mobile.png)
+
+</details>
 
 ## Implemented features
 
@@ -93,6 +160,7 @@ If Wi-Fi disappears, the control connection can reconnect through cellular while
 ```text
 android/             Android Studio / Gradle project
 backend/             Go control plane and SOCKS5 proxy
+docs/images/          Redacted live dashboard captures
 frontend/            Static dashboard
 nginx/               Nginx image, configuration, and local certificates
 scripts/             Setup, validation, smoke-test, and packaging scripts

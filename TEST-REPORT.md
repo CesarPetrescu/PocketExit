@@ -1,6 +1,6 @@
 # Test report
 
-Date: 2026-08-09
+Date: 2026-08-10
 
 ## Scope
 
@@ -24,6 +24,10 @@ The following checks were executed in the delivery environment:
 - Docker image construction and live Compose health checks;
 - public SparkTunnel dashboard, health, authenticated heartbeat, and admin
   readback checks at `https://exit.photonspark.ro`;
+- physical Samsung SM-G988B registration over Wi-Fi, independent cellular
+  validation, and a forced `s20u!cellular` public-IP request;
+- Hetzner 100 MB and 1 GB transfer probes through that physical phone, both of
+  which reproduced SparkTunnel's sustained-stream cutoff after 16–17 seconds;
 - Android XML parsing;
 - shell syntax validation;
 - source-policy scan for `VpnService`, process-wide binding, and root-shell use;
@@ -64,12 +68,26 @@ The included GitHub Actions workflow additionally performs:
 - Nginx `nginx -t` inside the exact image;
 - HTTPS health check through the Nginx gateway.
 
+## Physical-phone result
+
+The Samsung SM-G988B reported validated Wi-Fi (`wlan0`) and cellular (`rmnet1`)
+networks. A SOCKS request explicitly selecting `s20u!cellular` returned the
+phone's cellular public IPv4 address. The address, credentials, circuit IDs,
+and local network details are intentionally excluded from this repository.
+
+Short requests succeeded. The 100 MB probe received 1,982,208 bytes in 17.16
+seconds and the 1 GB probe received 474,878 bytes in 17.11 seconds before the
+SparkTunnel HTTP streams closed with TLS EOF. No test payload was retained.
+
 ## Environment limitations
 
-SparkTunnel successfully carries the dashboard, API, heartbeat, and control
-requests, but its plain HTTP path closes/buffers PocketExit's long-lived circuit
-body streams. The live SOCKS-over-emulator probe therefore opened an Android
-circuit but could not complete TLS data transfer. Direct Nginx exposure remains
-required for TCP/UDP circuits until the agent data protocol supports WebSockets.
+SparkTunnel 0.3.0 successfully carries the dashboard, API, heartbeat, control,
+and short circuit requests, but its HTTP path still closes sustained PocketExit
+circuit body streams after roughly 16–17 seconds. Direct Nginx exposure remains
+required for TCP/UDP circuits until SparkTunnel supports these long-lived
+streams or the agent data protocol moves to a supported transport such as
+WebSockets.
 
-No physical-phone LTE/5G throughput or handover test was possible in this environment. Real-device validation should cover Wi-Fi-to-cellular control reconnection, cellular-only public IP confirmation, OEM background-process behavior, and carrier-specific NAT/IPv6 conditions.
+Wi-Fi-to-cellular control reconnection, sustained direct-ingress throughput,
+OEM background-process behavior, and carrier-specific NAT/IPv6 conditions have
+not yet been measured on the physical phone.
