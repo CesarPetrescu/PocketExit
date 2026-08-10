@@ -249,6 +249,7 @@ tbody tr:hover { background: rgba(56, 189, 248, .035); }
 .empty-cell { border: 0; }
 
 footer { padding: 1.5rem 0 2rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .7rem; }
+footer a { color: var(--accent); }
 dialog {
   width: min(92vw, 430px);
   padding: 0;

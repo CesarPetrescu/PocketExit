@@ -910,4 +910,10 @@ Read [SECURITY.md](SECURITY.md) before exposing any of this to the Internet.
 
 ## License
 
-[MIT](LICENSE)
+Copyright © 2026 Cesar Petrescu.
+
+PocketExit is free software licensed under the
+[GNU Affero General Public License v3.0 or later](LICENSE). You may use, copy,
+modify, and redistribute it under that license. Redistributed versions must
+keep the copyright and license notices, and modified versions offered to users
+over a network must offer their corresponding source code. See [NOTICE](NOTICE).
