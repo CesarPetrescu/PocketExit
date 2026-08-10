@@ -120,11 +120,11 @@ This implementation intentionally uses reliable HTTP/3 streams, not QUIC DATAGRA
 ## Failure handling
 
 - Heartbeats run every 15 seconds.
-- Control long polls return after 25 seconds by default.
+- Control long polls return after 5 seconds by default so hosted connectors deliver commands inside the circuit-open window.
 - Missing networks produce a waiting state rather than route leakage.
 - Circuit-open acknowledgement is required before SOCKS reports success.
 - TCP destination connect timeout is 10 seconds.
-- Backend open timeout is 15 seconds by default.
+- Backend open timeout is 45 seconds by default.
 - Circuit stream completion closes both directions.
 - Stale closed circuit records are pruned.
 - Agent restarts are serialized so two transports cannot run concurrently.
