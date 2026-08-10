@@ -784,10 +784,13 @@ TEST-REPORT.md        Verification performed for this handoff
 make test          # Go unit + race + coverage, backend smoke, frontend syntax, YAML/XML/shell checks
 make test-android  # Gradle unit tests, lint, debug APK
 make test-docker   # Compose build, startup, health check, nginx -t
+make test-live     # Real HTTP/HTTPS/download/Git/WSS/security checks through every phone
 ```
 
 CI runs all three groups on every push and pull request, and uploads the debug
-APK as a build artifact.
+APK as a build artifact. `test-live` is intentionally manual: it requires the
+ignored `.env`, the running Compose deployment, and online physical phones. It
+never prints proxy credentials or the cellular public addresses it validates.
 
 ---
 

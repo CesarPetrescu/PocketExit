@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: setup test test-core test-go test-android test-docker smoke clean package
+.PHONY: setup test test-core test-go test-android test-docker test-live smoke clean package
 
 setup:
 	./scripts/setup.sh $${DOMAIN:-pocketexit.local}
@@ -26,6 +26,9 @@ test-docker:
 	done
 	docker compose exec -T nginx nginx -t
 	docker compose down -v
+
+test-live:
+	./scripts/live-phone-tests.sh
 
 smoke:
 	./scripts/smoke-backend.sh
