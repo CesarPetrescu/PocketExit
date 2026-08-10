@@ -24,8 +24,8 @@ The following checks were executed in the delivery environment:
 - Docker image construction and live Compose health checks;
 - public SparkTunnel dashboard, health, authenticated heartbeat, and admin
   readback checks at `https://exit.photonspark.ro`;
-- physical Samsung SM-G988B registration over Wi-Fi, independent cellular
-  validation, and a forced `s20u!cellular` public-IP request;
+- physical Samsung SM-G988B, SM-S908B, and SM-S928B registration, independent
+  Wi-Fi/cellular validation, and short Hetzner range downloads through each node;
 - Hetzner 100 MB and 1 GB transfer probes through that physical phone, both of
   which reproduced SparkTunnel's sustained-stream cutoff after 16–17 seconds;
 - Android XML parsing;
@@ -70,10 +70,13 @@ The included GitHub Actions workflow additionally performs:
 
 ## Physical-phone result
 
-The Samsung SM-G988B reported validated Wi-Fi (`wlan0`) and cellular (`rmnet1`)
-networks. A SOCKS request explicitly selecting `s20u!cellular` returned the
-phone's cellular public IPv4 address. The address, credentials, circuit IDs,
-and local network details are intentionally excluded from this repository.
+All three phones registered on app v0.3.0 with validated Wi-Fi and cellular:
+SM-G988B (`wlan0`/`rmnet1`), SM-S908B (`wlan0`/`rmnet0`), and SM-S928B
+(`wlan0`/`rmnet_data0`). Short authenticated Hetzner range downloads completed
+through each selected node. A SOCKS request explicitly selecting
+`s20u!cellular` also returned the phone's cellular public IPv4 address. The
+address, credentials, circuit IDs, and local network details are intentionally
+excluded from this repository.
 
 Short requests succeeded. The 100 MB probe received 1,982,208 bytes in 17.16
 seconds and the 1 GB probe received 474,878 bytes in 17.11 seconds before the

@@ -4,41 +4,78 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#020617">
   <title>PocketExit Control Plane</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div>
-      <p class="eyebrow">PRIVATE MOBILE EGRESS</p>
-      <h1>PocketExit</h1>
-    </div>
-    <div class="auth-panel">
-      <label for="admin-token">Admin token</label>
-      <div class="auth-row">
-        <input id="admin-token" type="password" autocomplete="off" placeholder="ADMIN_TOKEN">
-        <button id="save-token" class="primary">Connect</button>
+  <a class="skip-link" href="#main">Skip to dashboard</a>
+  <header class="site-header">
+    <div class="topbar">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true"><span></span></div>
+        <div>
+          <p class="eyebrow">PRIVATE MOBILE EGRESS</p>
+          <h1>PocketExit</h1>
+        </div>
       </div>
-      <span id="connection-state" class="status neutral">Not connected</span>
+      <div class="header-actions">
+        <span id="connection-state" class="status neutral" aria-live="polite">Not connected</span>
+        <button id="refresh" class="secondary" type="button">Refresh</button>
+      </div>
     </div>
+    <form id="auth-form" class="access-bar">
+      <div>
+        <strong>Control-plane access</strong>
+        <span>Token stays in this browser tab.</span>
+      </div>
+      <div class="auth-row">
+        <label class="sr-only" for="admin-token">Admin token</label>
+        <input id="admin-token" type="password" autocomplete="off" placeholder="Admin token" required>
+        <button id="save-token" class="primary" type="submit">Connect</button>
+      </div>
+    </form>
   </header>
 
-  <main>
-    <section class="summary-grid" aria-label="System summary">
-      <article class="summary-card"><span>Nodes</span><strong id="node-count">—</strong></article>
-      <article class="summary-card"><span>Online</span><strong id="online-count">—</strong></article>
-      <article class="summary-card"><span>Open circuits</span><strong id="circuit-count">—</strong></article>
-      <article class="summary-card"><span>Total traffic</span><strong id="traffic-total">—</strong></article>
+  <main id="main">
+    <section class="dashboard-intro" aria-labelledby="overview-title">
+      <div>
+        <p class="eyebrow">FLEET OVERVIEW</p>
+        <h2 id="overview-title">Network pulse</h2>
+        <p class="section-copy">Live health and traffic across every Android exit node.</p>
+      </div>
+      <span id="last-sync" class="sync-state">Waiting for connection</span>
+    </section>
+
+    <section class="overview-grid" aria-label="System summary">
+      <article class="summary-card"><span>Nodes</span><strong id="node-count">—</strong><small>registered</small></article>
+      <article class="summary-card"><span>Online</span><strong id="online-count">—</strong><small>healthy now</small></article>
+      <article class="summary-card"><span>Open circuits</span><strong id="circuit-count">—</strong><small>active + pending</small></article>
+      <article class="summary-card"><span>Total traffic</span><strong id="traffic-total">—</strong><small>lifetime relay</small></article>
+      <article class="traffic-panel">
+        <div class="traffic-heading">
+          <div>
+            <span class="panel-label">LIVE THROUGHPUT</span>
+            <strong id="traffic-rate">0 B/s</strong>
+          </div>
+          <div class="chart-legend" aria-hidden="true">
+            <span class="download">Down</span><span class="upload">Up</span>
+          </div>
+        </div>
+        <canvas id="traffic-chart" role="img" aria-describedby="traffic-description"></canvas>
+        <p id="traffic-description" class="sr-only">No traffic samples yet.</p>
+        <div class="chart-axis"><span>108 seconds ago</span><span>Now</span></div>
+      </article>
     </section>
 
     <section class="section-heading">
       <div>
         <p class="eyebrow">EXIT FLEET</p>
         <h2>Android nodes</h2>
+        <p class="section-copy">Availability, routing policy, and device health in one view.</p>
       </div>
-      <button id="refresh" class="secondary">Refresh</button>
     </section>
-    <section id="nodes" class="node-grid">
+    <section id="nodes" class="node-grid" aria-live="polite" aria-busy="false">
       <div class="empty-state">Enter the admin token to load nodes.</div>
     </section>
 
@@ -49,8 +86,8 @@
       </div>
       <label class="compact-control">Show
         <select id="circuit-filter">
-          <option value="active">active</option>
-          <option value="all">all</option>
+          <option value="active">Active</option>
+          <option value="all">All</option>
         </select>
       </label>
     </section>
@@ -65,7 +102,7 @@
             <th>Exit</th>
             <th>Traffic</th>
             <th>Age</th>
-            <th></th>
+            <th><span class="sr-only">Actions</span></th>
           </tr>
         </thead>
         <tbody id="circuits">
@@ -75,7 +112,9 @@
     </div>
   </main>
 
+  <footer>Private infrastructure, visible only to authenticated operators.</footer>
   <div id="toast" role="status" aria-live="polite"></div>
+  <noscript>PocketExit requires JavaScript to load fleet data.</noscript>
   <script src="/app.js" defer></script>
 </body>
 </html>

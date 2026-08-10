@@ -12,11 +12,14 @@ const state = {
   token: sessionStorage.getItem("pocketexit.adminToken") || "",
   nodes: [],
   circuits: [],
+  trafficSamples: Array.from({ length: 36 }, () => ({ up: 0, down: 0 })),
+  previousTraffic: null,
   polling: false,
   timer: null,
 };
 
 const elements = {
+  authForm: document.querySelector("#auth-form"),
   token: document.querySelector("#admin-token"),
   saveToken: document.querySelector("#save-token"),
   connection: document.querySelector("#connection-state"),
@@ -29,15 +32,20 @@ const elements = {
   onlineCount: document.querySelector("#online-count"),
   circuitCount: document.querySelector("#circuit-count"),
   trafficTotal: document.querySelector("#traffic-total"),
+  trafficRate: document.querySelector("#traffic-rate"),
+  trafficChart: document.querySelector("#traffic-chart"),
+  trafficDescription: document.querySelector("#traffic-description"),
+  lastSync: document.querySelector("#last-sync"),
 };
 
 elements.token.value = state.token;
-elements.saveToken.addEventListener("click", saveToken);
-elements.token.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") saveToken();
+elements.authForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveToken();
 });
 elements.refresh.addEventListener("click", refresh);
 elements.filter.addEventListener("change", renderCircuits);
+window.addEventListener("resize", drawTrafficChart);
 
 if (state.token) refresh();
 startPolling();
@@ -59,6 +67,8 @@ async function refresh(showErrors = true) {
   if (!state.token || state.polling) return;
   state.polling = true;
   elements.refresh.disabled = true;
+  elements.refresh.textContent = "Refreshing";
+  elements.nodes.setAttribute("aria-busy", "true");
   try {
     const [nodesResponse, circuitsResponse] = await Promise.all([
       api("/api/v1/nodes"),
@@ -67,6 +77,11 @@ async function refresh(showErrors = true) {
     state.nodes = nodesResponse.nodes || [];
     state.circuits = circuitsResponse.circuits || [];
     setConnection("Connected", "online");
+    elements.lastSync.textContent = `Updated ${new Date().toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    })}`;
     render();
   } catch (error) {
     setConnection(error.message, "error");
@@ -74,6 +89,8 @@ async function refresh(showErrors = true) {
   } finally {
     state.polling = false;
     elements.refresh.disabled = false;
+    elements.refresh.textContent = "Refresh";
+    elements.nodes.setAttribute("aria-busy", "false");
   }
 }
 
@@ -105,11 +122,80 @@ function render() {
 function renderSummary() {
   const online = state.nodes.filter((node) => node.online).length;
   const active = state.circuits.filter((circuit) => ["open", "pending"].includes(circuit.status));
-  const traffic = state.nodes.reduce((sum, node) => sum + (node.bytes_up || 0) + (node.bytes_down || 0), 0);
+  const up = state.nodes.reduce((sum, node) => sum + (node.bytes_up || 0), 0);
+  const down = state.nodes.reduce((sum, node) => sum + (node.bytes_down || 0), 0);
+  const traffic = up + down;
+  if (state.previousTraffic) {
+    state.trafficSamples.push({
+      up: Math.max(0, up - state.previousTraffic.up) / 3,
+      down: Math.max(0, down - state.previousTraffic.down) / 3,
+    });
+    state.trafficSamples.shift();
+  }
+  state.previousTraffic = { up, down };
+  const latest = state.trafficSamples.at(-1);
   elements.nodeCount.textContent = String(state.nodes.length);
   elements.onlineCount.textContent = String(online);
   elements.circuitCount.textContent = String(active.length);
   elements.trafficTotal.textContent = formatBytes(traffic);
+  elements.trafficRate.textContent = `${formatBytes(latest.up + latest.down)}/s`;
+  elements.trafficDescription.textContent = `Current download ${formatBytes(latest.down)} per second and upload ${formatBytes(latest.up)} per second.`;
+  drawTrafficChart();
+}
+
+function drawTrafficChart() {
+  const canvas = elements.trafficChart;
+  const bounds = canvas.getBoundingClientRect();
+  if (!bounds.width || !bounds.height) return;
+  const scale = window.devicePixelRatio || 1;
+  canvas.width = Math.round(bounds.width * scale);
+  canvas.height = Math.round(bounds.height * scale);
+  const context = canvas.getContext("2d");
+  context.scale(scale, scale);
+  context.clearRect(0, 0, bounds.width, bounds.height);
+  context.strokeStyle = "rgba(255,255,255,.07)";
+  context.lineWidth = 1;
+  for (const ratio of [0, .5, 1]) {
+    context.beginPath();
+    context.moveTo(0, bounds.height * ratio);
+    context.lineTo(bounds.width, bounds.height * ratio);
+    context.stroke();
+  }
+  const ceiling = Math.max(1, ...state.trafficSamples.flatMap((sample) => [sample.up, sample.down]));
+  drawLine("down", "#38bdf8", "rgba(56,189,248,.12)");
+  drawLine("up", "#a78bfa");
+
+  function drawLine(field, color, fill) {
+    const points = state.trafficSamples.map((sample, index) => ({
+      x: bounds.width * index / (state.trafficSamples.length - 1),
+      y: bounds.height - sample[field] / ceiling * bounds.height * .88,
+    }));
+    plot(points);
+    if (fill) {
+      context.lineTo(bounds.width, bounds.height);
+      context.lineTo(0, bounds.height);
+      context.closePath();
+      context.fillStyle = fill;
+      context.fill();
+      plot(points);
+    }
+    context.strokeStyle = color;
+    context.lineWidth = field === "down" ? 2.5 : 2;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.stroke();
+  }
+
+  function plot(points) {
+    context.beginPath();
+    context.moveTo(points[0].x, points[0].y);
+    for (let index = 1; index < points.length; index += 1) {
+      const previous = points[index - 1];
+      const point = points[index];
+      const middle = (previous.x + point.x) / 2;
+      context.bezierCurveTo(middle, previous.y, middle, point.y, point.x, point.y);
+    }
+  }
 }
 
 function renderNodes() {
@@ -155,7 +241,7 @@ function nodeCard(node) {
   stats.append(miniStat("Active route", node.active_control_network || "—"));
   stats.append(miniStat("Transport", node.transport_protocol || "—"));
   stats.append(miniStat("Circuits", String(node.active_circuits || 0)));
-  stats.append(miniStat("Battery", `${node.battery_percent ?? 0}%${node.charging ? " ⚡" : ""}`));
+  stats.append(miniStat("Battery", `${node.battery_percent ?? 0}%${node.charging ? " · charging" : ""}`));
   stats.append(miniStat("Up", formatBytes(node.bytes_up || 0)));
   stats.append(miniStat("Down", formatBytes(node.bytes_down || 0)));
   stats.append(miniStat("Total", formatBytes((node.bytes_up || 0) + (node.bytes_down || 0))));
@@ -177,7 +263,6 @@ function networkCard(name, network = {}) {
 
   const details = el("div", "network-details");
   details.append(detail("Interface", network.interface_name || "—"));
-  details.append(detail("Address", (network.addresses || [])[0] || "—"));
   details.append(detail("Link", `${formatRate(network.down_kbps)} ↓ / ${formatRate(network.up_kbps)} ↑`));
   details.append(detail("MTU", network.mtu ? String(network.mtu) : "—"));
   details.append(detail("Metered", network.metered ? "Yes" : "No"));
@@ -247,6 +332,9 @@ function renderCircuits() {
       action.append(button);
     }
     row.append(action);
+    ["Status", "Node", "Protocol", "Target", "Exit", "Traffic", "Age", "Action"].forEach((label, index) => {
+      row.children[index].dataset.label = label;
+    });
     elements.circuits.append(row);
   }
 }

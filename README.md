@@ -29,7 +29,7 @@ curl --proxy socks5h://proxy.example.com:1080 \
 ```
 
 > [!IMPORTANT]
-> The v0.2.0 APK is debug-signed. SparkTunnel 0.3.0 carries the dashboard, API,
+> The v0.3.0 APK is debug-signed. SparkTunnel 0.3.0 carries the dashboard, API,
 > heartbeats, and short requests fine, but its HTTP path cuts sustained circuit
 > streams after roughly 16–17 seconds. Use direct Nginx ingress for normal
 > SOCKS5 traffic.
@@ -499,10 +499,15 @@ out, even when cancelled, so the backend never keeps a phantom circuit open.
 
 ## Verified on real hardware
 
-On 2026-08-10 a USB-debugged Samsung **SM-G988B** (Galaxy S20 Ultra, node
-`s20u`) ran the agent against the live deployment. Wi-Fi (`wlan0`) carried
-control traffic; cellular (`rmnet1`) was independently validated for exit
-traffic.
+The v0.3.0 agent was installed and exercised on all three nodes on 2026-08-10:
+
+| Node | Device | Android network interfaces | Result |
+|---|---|---|---|
+| `s20u` | Galaxy S20 Ultra (`SM-G988B`) | `wlan0` + `rmnet1` | Online; Hetzner range download passed |
+| `s22u` | Galaxy S22 Ultra (`SM-S908B`) | `wlan0` + `rmnet0` | Online; Hetzner range download passed |
+| `s24u` | Galaxy S24 Ultra (`SM-S928B`) | `wlan0` + `rmnet_data0` | Online; Hetzner range download passed |
+
+The S20 Ultra also ran an explicit forced-cellular public-IP check:
 
 ```bash
 curl --proxy socks5h://proxy.example.com:1080 \
@@ -529,10 +534,10 @@ the hosted tunnel. See [TEST-REPORT.md](TEST-REPORT.md).
 ## Dashboard
 
 One responsive administration page covers fleet status, network validation,
-route policies, battery and traffic telemetry, and live circuits. These captures
-come from the live deployment; tokens, IP addresses, DNS servers, circuit ids,
-and destinations were removed before the images were written. The test phone
-still ran app v0.1.0 at capture time; the current APK is v0.2.0.
+route policies, battery and traffic telemetry, and live circuits. These v0.3.0
+captures come from the live deployment. The admin token is masked, and the UI
+intentionally omits device IP addresses and DNS servers. No bearer token,
+public IP, circuit id, or destination appears in the repository images.
 
 ![PocketExit dashboard showing the real Galaxy S20 Ultra online](docs/images/dashboard-desktop.png)
 
@@ -543,7 +548,16 @@ still ran app v0.1.0 at capture time; the current APK is v0.2.0.
 
 </details>
 
-It shows online/selectable state, Wi-Fi and cellular validation with addresses,
+### Android app
+
+The fixed Overview surface below shows real relayed traffic. Android System UI
+demo mode suppressed personal notification details during capture.
+
+| Galaxy S22 Ultra | Galaxy S24 Ultra |
+|---|---|
+| ![PocketExit v0.3.0 running on a Galaxy S22 Ultra](docs/images/android-s22-ultra.png) | ![PocketExit v0.3.0 running on a Galaxy S24 Ultra](docs/images/android-s24-ultra.png) |
+
+The web dashboard shows online/selectable state, Wi-Fi and cellular validation,
 interface, MTU, metering and estimated link rates, the active control route and
 negotiated HTTP protocol, battery and charging, live circuits with byte
 counters, remote enable/disable and policy selection, and circuit termination.
