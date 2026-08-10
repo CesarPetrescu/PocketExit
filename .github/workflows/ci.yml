@@ -26,16 +26,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-      - uses: android-actions/setup-android@v3
-      - name: Install Android SDK packages
-        run: yes | sdkmanager "platforms;android-36" "build-tools;36.0.0"
-      - name: Verify, lint, and build Android
-        working-directory: android
-        run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
+      - name: Build Android toolchain image
+        run: docker build -t pocketexit-android-builder android
+      - name: Verify, lint, and build Android in container
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp -e GRADLE_USER_HOME=/tmp/gradle \
+            -v "$PWD/android:/workspace" \
+            pocketexit-android-builder testDebugUnitTest lintDebug assembleDebug
       - uses: actions/upload-artifact@v4
         with:
           name: pocket-exit-debug-apk

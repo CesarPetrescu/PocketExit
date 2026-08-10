@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,5 +69,44 @@ func TestHeartbeatAndControl(t *testing.T) {
 	}
 	if command.CircuitID != "c1" {
 		t.Fatalf("expected c1, got %s", command.CircuitID)
+	}
+}
+
+func TestOnboardingQRCode(t *testing.T) {
+	cfg := config.Config{
+		AdminToken:      "admin-test-token-2026",
+		AgentTokens:     map[string]string{"phone": "agent-test-token-2026"},
+		PublicProxyHost: "proxy.example.com",
+	}
+	server := httptest.NewServer(New(
+		cfg,
+		nodes.NewRegistry(time.Minute, 10),
+		circuit.NewManager(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	).Handler())
+	defer server.Close()
+	request, _ := http.NewRequest(http.MethodGet, server.URL+"/api/v1/nodes/phone/onboarding", nil)
+	request.Header.Set("Authorization", "Bearer admin-test-token-2026")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var payload map[string]string
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(payload["onboarding_uri"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Scheme != "pocketexit" || parsed.Host != "configure" ||
+		parsed.Query().Get("server") != "https://proxy.example.com" ||
+		parsed.Query().Get("node") != "phone" ||
+		parsed.Query().Get("token") != "agent-test-token-2026" {
+		t.Fatalf("unexpected onboarding URI %q", parsed)
+	}
+	if !strings.HasPrefix(payload["qr_svg"], "<svg") || !strings.Contains(payload["qr_svg"], "<path") {
+		t.Fatal("response did not contain an SVG QR code")
 	}
 }

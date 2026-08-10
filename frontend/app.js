@@ -36,6 +36,10 @@ const elements = {
   trafficChart: document.querySelector("#traffic-chart"),
   trafficDescription: document.querySelector("#traffic-description"),
   lastSync: document.querySelector("#last-sync"),
+  pairDialog: document.querySelector("#pair-dialog"),
+  pairDetail: document.querySelector("#pair-detail"),
+  pairQr: document.querySelector("#pair-qr"),
+  pairClose: document.querySelector("#pair-close"),
 };
 
 elements.token.value = state.token;
@@ -46,6 +50,8 @@ elements.authForm.addEventListener("submit", (event) => {
 elements.refresh.addEventListener("click", refresh);
 elements.filter.addEventListener("change", renderCircuits);
 window.addEventListener("resize", drawTrafficChart);
+elements.pairClose.addEventListener("click", () => elements.pairDialog.close());
+elements.pairDialog.addEventListener("close", () => elements.pairQr.removeAttribute("src"));
 
 if (state.token) refresh();
 startPolling();
@@ -219,13 +225,18 @@ function nodeCard(node) {
   titleArea.append(title);
   titleArea.append(el("div", "node-meta", `${node.node_id} · ${node.app_version || "unknown build"} · seen ${formatAge(node.last_seen)}`));
 
+  const actions = el("div", "node-actions");
+  const pair = el("button", "secondary pair-button", "Pair phone");
+  pair.type = "button";
+  pair.addEventListener("click", () => openPairing(node));
   const toggle = el("label", "switch");
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.checked = Boolean(node.enabled);
   checkbox.addEventListener("change", () => updateNode(node.node_id, { enabled: checkbox.checked }));
   toggle.append(checkbox, document.createTextNode("Selectable"));
-  header.append(titleArea, toggle);
+  actions.append(pair, toggle);
+  header.append(titleArea, actions);
 
   const body = el("div", "node-body");
   const networkGrid = el("div", "network-grid");
@@ -249,6 +260,17 @@ function nodeCard(node) {
 
   card.append(header, body);
   return card;
+}
+
+async function openPairing(node) {
+  try {
+    const payload = await api(`/api/v1/nodes/${encodeURIComponent(node.node_id)}/onboarding`);
+    elements.pairDetail.textContent = `${node.device_name || node.node_id} · ${node.node_id}`;
+    elements.pairQr.src = `data:image/svg+xml;base64,${btoa(payload.qr_svg)}`;
+    elements.pairDialog.showModal();
+  } catch (error) {
+    showToast(error.message, true);
+  }
 }
 
 function networkCard(name, network = {}) {

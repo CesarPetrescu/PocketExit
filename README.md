@@ -67,10 +67,9 @@ See the full [Quick start](#quick-start) for trusted TLS, phone configuration,
 SparkTunnel, validation, and selector examples.
 
 > [!IMPORTANT]
-> The v0.3.0 APK is debug-signed. SparkTunnel 0.3.0 carries the dashboard, API,
-> heartbeats, and short requests fine, but its HTTP path cuts sustained circuit
-> streams after roughly 16–17 seconds. Use direct Nginx ingress for normal
-> SOCKS5 traffic.
+> v0.4.0 moves circuit bytes to authenticated WebSockets. A simulated phone
+> completed two independent 8.4 MB SOCKS transfers across reconnects; the older
+> v0.3.0 HTTP-stream cutoff remains documented below as historical evidence.
 
 ---
 
@@ -108,9 +107,9 @@ flowchart TB
     BROWSER["<b>Browser</b><br/>admin dashboard"]
     SPARK["<b>PhotonSpark edge</b><br/>optional · no inbound rule"]
 
-    CLI -->|"TCP 1080 · UDP 12000-12031"| NGINX
+    CLI -->|"TCP 1080/1081 · UDP 12000-12031"| NGINX
     BROWSER -->|"HTTPS 443"| NGINX
-    SPARK -.->|"dashboard/API tunnel"| NGINX
+    SPARK -.->|"HTTPS/WebSocket tunnel"| NGINX
 
     subgraph vps["Server — only Nginx publishes host ports"]
         NGINX["<b>Nginx</b> · TLS · HTTP/2 · HTTP/3<br/>TCP stream proxy · UDP relay pool"]
@@ -118,7 +117,7 @@ flowchart TB
         NGINX -->|"private Docker bridge, never published"| GO
     end
 
-    GO <-->|"long poll + circuit streams · HTTP/3 over QUIC"| P1["agent <b>s20u</b>"]
+    GO <-->|"long poll + binary circuit WebSockets"| P1["agent <b>s20u</b>"]
     GO <--> P2["agent <b>s22u</b>"]
     GO <--> P3["agent <b>s24u</b>"]
 
@@ -145,6 +144,7 @@ internal Compose network.
 | `443` | TCP | yes | Dashboard, `/api/`, `/agent/` over TLS + HTTP/2 |
 | `443` | UDP | yes | The same, over HTTP/3 / QUIC |
 | `1080` | TCP | yes | Authenticated SOCKS5 (Nginx `stream` → backend) |
+| `1081` | TLS/TCP | yes | TLS-wrapped SOCKS5 for a local TLS-wrapper client |
 | `12000–12031` | UDP | yes | SOCKS5 UDP relay pool, one port per association |
 | `8080` | TCP | **no** | Go HTTP API, internal bridge only |
 | `8081` | TCP | **no** | Plain-HTTP origin for the optional SparkTunnel connector |
@@ -169,7 +169,7 @@ flowchart LR
     CTRL["<b>PolicySelector</b><br/>control policy"]
     EXIT["<b>PolicySelector</b><br/>exit policy"]
 
-    CTRL -->|"every Cronet request is bound<br/>to this Network handle"| GW["Gateway :443<br/>heartbeats · commands · circuit byte streams"]
+    CTRL -->|"Cronet + OkHttp are bound<br/>to this Network handle"| GW["Gateway :443<br/>heartbeats · commands · circuit WebSockets"]
     EXIT -->|"DNS resolution and the destination<br/>socket are bound to this Network handle"| DEST["Destination"]
 
     classDef radio fill:#1d2b3f,stroke:#8fb3e0,color:#eef4ff
@@ -229,7 +229,7 @@ sequenceDiagram
     Note over P: resolve on the cellular Network<br/>DestinationAcl drops private answers
     P->>D: TCP connect from the SIM, 10s budget
     D-->>P: connected
-    P->>G: GET :id/down and POST :id/up, both bodies held open
+    P->>G: GET :id/ws, authenticated WebSocket upgrade
     P->>G: POST :id/status connected
     Note over G: MarkOpen releases the waiting handshake
     G-->>C: 0x05 0x00 success
@@ -347,7 +347,7 @@ stateDiagram-v2
     pending --> open: agent posts status connected
     pending --> failed: agent posts status failed
     pending --> closed: OPEN_TIMEOUT elapses, SOCKS replies 0x05
-    open --> closed: down or up stream ends
+    open --> closed: WebSocket or either socket ends
     open --> closed: SOCKS client disconnects
     open --> closed: DELETE /api/v1/circuits/:id
     failed --> closed: cleanup
@@ -367,22 +367,23 @@ Timing that governs those transitions:
 | control reconnect backoff | 1 s → 15 s | doubling, reset on any success |
 | `IDLE_TIMEOUT` | 2 m | UDP association read deadline |
 | `MAX_CIRCUITS_PER_NODE` | 128 | per-node ceiling, enforced in the registry **and** atomically in the circuit manager |
+| `MAX_BYTES_PER_CIRCUIT` | 1 GiB | combined up/down transfer ceiling |
 
 ## 4. How the bytes actually move
 
-A circuit is two independent HTTP streams in opposite directions, not one
-multiplexed tunnel.
+A circuit is one authenticated binary WebSocket carrying a full-duplex byte
+stream. TCP bytes pass through unchanged; UDP keeps its two-byte length frames.
 
 ```mermaid
 flowchart LR
     subgraph downdir["down — client to destination"]
         direction LR
-        D1["client<br/>socket"] --> D2["circuit<br/><b>down pipe</b>"] --> D3["GET :id/down<br/>body held open,<br/>flushed per chunk"] --> D4["destination<br/>socket"]
+        D1["client<br/>socket"] --> D2["circuit<br/><b>down pipe</b>"] --> D3["binary WebSocket<br/>server → phone"] --> D4["destination<br/>socket"]
     end
 
     subgraph updir["up — destination to client"]
         direction LR
-        U1["destination<br/>socket"] --> U2["POST :id/up<br/>chunked body<br/>held open"] --> U3["circuit<br/><b>up pipe</b>"] --> U4["client<br/>socket"]
+        U1["destination<br/>socket"] --> U2["binary WebSocket<br/>phone → server"] --> U3["circuit<br/><b>up pipe</b>"] --> U4["client<br/>socket"]
     end
 
     classDef d fill:#16233a,stroke:#7aa2d6,color:#eef4ff
@@ -393,13 +394,11 @@ flowchart LR
 
 Why it is built this way:
 
-- **Nginx buffering is off under `/agent/`** in both directions, so nothing
-  accumulates on disk or in RAM and latency stays low.
-- **HTTP/3 terminates at Nginx**, which forwards the private hop to Go over
-  plain HTTP/1.1. QUIC's loss recovery covers the lossy mobile segment; the Go
-  service stays dependency-free.
-- Each circuit gets its own pair of streams, so one stalled connection cannot
-  head-of-line block another inside a shared custom framing layer.
+- **Nginx upgrades `/agent/` WebSockets** and disables buffering on legacy
+  stream endpoints. SparkTunnel can carry the upgraded connection without the
+  v0.3.0 sustained-response cutoff.
+- Each circuit gets its own WebSocket, so one stalled connection cannot
+  head-of-line block another inside a shared multiplexing layer.
 - Byte counters increment on those pipe writes and surface per circuit in
   `/api/v1/circuits` and on the dashboard. `/api/v1/metrics` exposes node and
   circuit *counts* rather than volumes.
@@ -410,7 +409,7 @@ Why it is built this way:
 flowchart LR
     A["SOCKS5 <b>UDP ASSOCIATE</b><br/>over the authenticated<br/>TCP connection"] --> B["one port taken from<br/>12000-12031, returned<br/>in the SOCKS reply"]
     B --> C["association locks to the<br/><b>first</b> source endpoint;<br/>one circuit per destination"]
-    C --> D["uint16 length + payload,<br/>over the reliable<br/>HTTP/3 stream"]
+    C --> D["uint16 length + payload,<br/>over the reliable<br/>WebSocket"]
     D --> E["sent from a connected<br/>DatagramSocket bound<br/>to the exit Network"]
     F["TCP control<br/>connection closes"] --> G["association closes,<br/>port returns to the pool,<br/>target circuits close"]
 
@@ -434,7 +433,7 @@ Datagram boundaries are preserved with a two-byte big-endian length prefix:
 +-------------------------------+
 ```
 
-This deliberately rides **reliable** HTTP/3 streams — not QUIC DATAGRAM, not
+This deliberately rides a **reliable WebSocket** — not QUIC DATAGRAM, not
 MASQUE CONNECT-UDP. Order and delivery are preserved, which suits DNS and
 ordinary low-volume UDP, but real-time media will feel head-of-line delay after
 packet loss.
@@ -488,7 +487,7 @@ flowchart TB
     SOCKS["<b>SOCKS_USERNAME + SOCKS_PASSWORD</b>"] -->|"RFC 1929 username/password"| PROXY[":1080 CONNECT and UDP ASSOCIATE"]
     AGENT["<b>one agent token per node id</b><br/>from AGENT_TOKENS_JSON"] -->|"Bearer + the node id must match the token"| EP["/agent/v1/*"]
     EP --> OWN["circuit ownership check:<br/>circuit.node_id must equal the calling node"]
-    OWN --> STREAM["only then may it read /down or write /up"]
+    OWN --> STREAM["only then may it upgrade /ws"]
 
     classDef k fill:#2b2140,stroke:#b18cf0,color:#f5efff
     classDef s fill:#16233a,stroke:#7aa2d6,color:#eef4ff
@@ -569,8 +568,7 @@ curl --proxy socks5h://proxy.example.com:1080 \
 # [cellular public IPv4 redacted] — the SIM's address, not the Wi-Fi uplink's
 ```
 
-Normal browsing and bounded downloads now work. Sustained-body probes still
-record the current SparkTunnel ceiling:
+These v0.3.0 probes recorded why the circuit transport changed in v0.4.0:
 
 | Probe through `s20u!cellular` | Result | Bytes received | Duration |
 |---|---:|---:|---:|
@@ -578,11 +576,11 @@ record the current SparkTunnel ceiling:
 | Hetzner `100MB.bin` | Stream closed | 1,982,208 | 17.16 s |
 | Hetzner `1GB.bin` | Stream closed | 474,878 | 17.11 s |
 
-Both large probes received HTTP 200 before SparkTunnel ended the TLS stream with
-an unexpected EOF after about 17 seconds. A full Wikipedia desktop page also
-reproduced this boundary on `s20u`. This demonstrates phone selection and
-cellular routing; it is **not** a throughput benchmark or a claim that large
-transfers work through the hosted tunnel. See [TEST-REPORT.md](TEST-REPORT.md).
+Both large probes received HTTP 200 before the old paired-HTTP transport ended
+with an unexpected EOF after about 17 seconds. The v0.4.0 WebSocket replacement
+passed two 8.4 MB transfers through a simulated phone and reconnected cleanly.
+Physical-phone v0.4.0 sustained testing is still required before claiming a
+carrier throughput result. See [TEST-REPORT.md](TEST-REPORT.md).
 
 ---
 
@@ -626,7 +624,7 @@ The admin token lives only in `sessionStorage`.
 
 - Docker Engine with the Compose plugin, and OpenSSL
 - A DNS name pointing at the server for a real deployment
-- TCP 80, TCP/UDP 443, TCP 1080 and UDP 12000–12031 open through the firewall
+- TCP 80, TCP/UDP 443, TCP 1080 or TLS/TCP 1081, and optional UDP 12000–12031
 - For the app: Android Studio, or JDK 17 plus an SDK with API 36
 
 ### 1. Server
@@ -671,10 +669,9 @@ through `https://exit.photonspark.ro`.
 docker compose --profile tunnel -f docker-compose.yml -f docker-compose.tunnel.yml up --build -d
 ```
 
-SparkTunnel does **not** carry raw SOCKS5 TCP or the UDP relay ports, and its
-HTTP transport does not preserve long-lived circuit bodies. Use the direct Nginx
-host mappings for working TCP/UDP circuits until the circuit protocol speaks
-WebSockets.
+SparkTunnel carries the dashboard, API, agent control, and v0.4.0 circuit
+WebSockets. It does **not** publish raw SOCKS5 TCP or UDP relay ports, so clients
+still need direct/VPN access to 1080/1081 and 12000–12031.
 
 </details>
 
@@ -709,6 +706,11 @@ Copy the APK to each phone over USB, cloud storage, or a browser download — no
 ADB required — then open it and approve installation from that source. With
 development certificates, also install `nginx/certs/ca.crt` as a user CA and use
 only the debug APK with it.
+
+After a node has registered, the dashboard's **Pair phone** action displays a
+QR. Scan it with Android's normal camera, verify the server and node shown by
+PocketExit, then import. The QR contains that node's bearer token; do not share
+or retain screenshots of it.
 
 `.env` contains `AGENT_TOKENS_JSON={"s20u":"…","s22u":"…","s24u":"…"}`. On each
 phone, enter:
@@ -765,9 +767,10 @@ All four forms are valid: `proxy`, `proxy@NODE_ID`, `proxy!POLICY`,
 NR rather than LTE.
 
 > [!WARNING]
-> `:1080` is plain SOCKS5 over raw TCP. RFC 1929 does not encrypt the
-> username/password exchange. Restrict TCP 1080 to trusted sources, reach it
-> through a VPN or SSH tunnel, or put a client-side TLS wrapper in front of it.
+> `:1080` is plain SOCKS5 over raw TCP. Restrict it to trusted sources or a VPN.
+> Port `1081` wraps the same SOCKS5 session in TLS for clients using `stunnel`,
+> `gost`, or another local TLS wrapper. Standard `curl --proxy socks5h://...`
+> does not add that outer TLS layer by itself.
 > HTTPS destinations keep their own end-to-end TLS either way, but the SOCKS
 > credentials themselves are exposed to the network path.
 
@@ -797,9 +800,11 @@ listeners open.
 | `OPEN_TIMEOUT` | `45s` | Wait for the phone to confirm a circuit |
 | `IDLE_TIMEOUT` | `2m` | UDP association idle deadline |
 | `MAX_CIRCUITS_PER_NODE` | `128` | Per-node concurrent circuit ceiling |
+| `MAX_BYTES_PER_CIRCUIT` | `1073741824` | Combined transfer ceiling per circuit, minimum 1 MiB |
 | `ALLOW_PRIVATE_DESTINATIONS` | `false` | Keep `false` for an Internet exit pool |
 | `LOG_JSON` | `true` | JSON handler when `true`, plain text when `false` |
 | `LOG_LEVEL` | `info` | Set to `debug` for verbose handler logs |
+| `AUDIT_LOG_PATH` | `/data/audit.jsonl` | Durable structured JSONL log on the persistent Docker volume |
 | `SPARK_TUNNEL_TOKEN` | — | Only for the optional `tunnel` Compose profile |
 
 ---
@@ -811,14 +816,15 @@ listeners open.
 | `GET` | `/api/v1/health` | none | Liveness |
 | `GET` | `/api/v1/nodes` | admin | Node inventory with full telemetry |
 | `PATCH` | `/api/v1/nodes/{nodeID}` | admin | Enable/disable, set control and exit policy |
+| `GET` | `/api/v1/nodes/{nodeID}/onboarding` | admin | On-demand agent deep link and QR SVG |
 | `GET` | `/api/v1/circuits` | admin | Circuit inventory |
 | `DELETE` | `/api/v1/circuits/{circuitID}` | admin | Close a circuit |
 | `GET` | `/api/v1/metrics` | admin | Prometheus text metrics |
 | `POST` | `/agent/v1/heartbeat` | node | Register and report telemetry |
 | `GET` | `/agent/v1/control` | node | Long poll for the next command |
 | `POST` | `/agent/v1/circuits/{id}/status` | node | `connected` / `failed` / `closed` |
-| `GET` | `/agent/v1/circuits/{id}/down` | node | Streaming server → phone bytes |
-| `POST` | `/agent/v1/circuits/{id}/up` | node | Streaming phone → server bytes |
+| `GET` | `/agent/v1/circuits/{id}/ws` | node | Full-duplex binary WebSocket data plane |
+| `GET` / `POST` | `/agent/v1/circuits/{id}/down` / `up` | node | Legacy v0.3.0 stream compatibility |
 
 A policy `PATCH` is transactional: if the command queue for that node is full,
 the dashboard state is rolled back rather than drifting from the phone.
@@ -829,8 +835,8 @@ Full request and response shapes live in [PROTOCOL.md](PROTOCOL.md).
 ## Repository layout
 
 ```text
-android/              Android Studio / Gradle project (Kotlin, Compose, Cronet)
-  …/network/          NetworkMonitor · PolicySelector · CronetTransport · DestinationAcl
+android/              Android Studio / Gradle project (Kotlin, Compose, Cronet, OkHttp)
+  …/network/          NetworkMonitor · HTTP/WebSocket transports · PolicySelector · ACL
   …/proxy/            CircuitManager · DatagramCodec
   …/service/          ExitNodeService foreground service · BootReceiver
 backend/              Go control plane and SOCKS5 proxy
@@ -865,6 +871,14 @@ CI runs all three groups on every push and pull request, and uploads the debug
 APK as a build artifact. `test-live` is intentionally manual: it requires the
 ignored `.env`, the running Compose deployment, and online physical phones. It
 never prints proxy credentials or the cellular public addresses it validates.
+Tag pushes run the signed-release workflow and publish checksummed APKs plus
+backend, Nginx, and Android-builder images to GHCR. Configure the four
+repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,
+`ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD` before creating a release tag.
+For PKCS#12 stores, use the same store and key password; JKS supports distinct
+passwords. The tag must match `versionName`, for example `v0.4.0`.
+Back up the signing keystore and passwords in a secure location: losing them
+prevents future updates from being accepted over an installed release APK.
 
 ---
 
@@ -874,7 +888,7 @@ never prints proxy credentials or the cellular public addresses it validates.
   history. Phones re-register on their next heartbeat.
 - **Circuits do not survive a control-network change.** They close; the agent
   reconnects and accepts new ones.
-- **UDP is length-framed over reliable HTTP/3 streams**, not QUIC DATAGRAM or
+- **UDP is length-framed over a reliable WebSocket**, not QUIC DATAGRAM or
   MASQUE. Order and delivery hold, but loss adds head-of-line latency.
 - **The UDP relay pool has a first-packet race.** A port is created only after
   an authenticated `UDP ASSOCIATE` and locks to the first source endpoint it
@@ -884,8 +898,8 @@ never prints proxy credentials or the cellular public addresses it validates.
   the app from battery optimisation is a manual step in device settings.
 - **HTTP/3 is opportunistic.** A path blocking UDP 443 falls back to HTTPS over
   TCP. Watch `transport_protocol` in the telemetry if that matters.
-- **Not implemented:** multi-user tenancy, billing, persistent audit storage,
-  mTLS, automatic certificate issuance, horizontal replication.
+- **Not implemented:** multi-user tenancy, billing, tamper-evident audit
+  signing, mTLS, automatic certificate issuance, horizontal replication.
 - **Legal:** carrier terms and local law may restrict proxying or sustained
   tethering-like traffic. Use only devices, SIMs, accounts, and services you own
   and are authorised to operate.

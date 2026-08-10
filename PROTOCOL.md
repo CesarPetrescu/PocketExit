@@ -126,26 +126,21 @@ POST /agent/v1/circuits/{circuitID}/status
 
 Valid states sent by the agent are `connected`, `failed`, and `closed`. A `connected` status releases the waiting SOCKS handshake.
 
-### Server-to-phone bytes
+### Circuit WebSocket
 
 ```http
-GET /agent/v1/circuits/{circuitID}/down?node_id=s24u
-Accept: application/octet-stream
+GET /agent/v1/circuits/{circuitID}/ws?node_id=s24u
+Sec-WebSocket-Protocol: pocketexit.circuit.v1
 ```
 
-The response remains open and streams bytes from the SOCKS client toward the Android destination socket.
+After an authenticated upgrade, each binary message carries circuit bytes. The
+connection is full duplex: server-to-phone bytes come from the SOCKS client and
+phone-to-server bytes come from the destination socket. Text messages are
+rejected. The connection closes when either side ends the circuit or its
+combined byte quota is exhausted.
 
-### Phone-to-server bytes
-
-```http
-POST /agent/v1/circuits/{circuitID}/up?node_id=s24u
-Content-Type: application/octet-stream
-Transfer-Encoding: chunked
-```
-
-The request body remains open and streams destination bytes toward the SOCKS client.
-
-For TCP, the request/response body contains raw TCP bytes. For UDP, it contains repeated frames:
+For TCP, each message contains raw stream bytes. Message boundaries have no TCP
+semantics. For UDP, the byte stream contains repeated frames:
 
 ```text
 0                   1                   2
@@ -159,6 +154,9 @@ For TCP, the request/response body contains raw TCP bytes. For UDP, it contains 
 
 Maximum payload length is 65,507 bytes.
 
+The v0.3.0 `GET .../down` and `POST .../up` streaming endpoints remain available
+for rolling upgrades, but new agents use the WebSocket endpoint.
+
 ## Admin endpoints
 
 | Method | Path | Purpose |
@@ -166,6 +164,7 @@ Maximum payload length is 65,507 bytes.
 | GET | `/api/v1/health` | Unauthenticated liveness check |
 | GET | `/api/v1/nodes` | Node inventory |
 | PATCH | `/api/v1/nodes/{nodeID}` | Enable/disable and update policies |
+| GET | `/api/v1/nodes/{nodeID}/onboarding` | Pairing URI and inline QR SVG |
 | GET | `/api/v1/circuits` | Circuit inventory |
 | DELETE | `/api/v1/circuits/{circuitID}` | Close a circuit |
 | GET | `/api/v1/metrics` | Prometheus text metrics |

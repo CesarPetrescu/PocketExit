@@ -2,6 +2,7 @@ package circuit
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -44,6 +45,42 @@ func TestCircuitBidirectionalData(t *testing.T) {
 	}
 	if string(gotUp) != string(up) {
 		t.Fatalf("up mismatch: %q", gotUp)
+	}
+}
+
+func TestCircuitByteQuota(t *testing.T) {
+	manager := NewManager()
+	c, err := manager.CreateLimitedWithQuota(
+		"phone",
+		model.ProtocolTCP,
+		"example.com",
+		443,
+		model.PolicyCellularOnly,
+		1,
+		5,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type writeResult struct {
+		count int
+		err   error
+	}
+	result := make(chan writeResult, 1)
+	go func() {
+		count, writeErr := c.WriteDown([]byte("123456"))
+		result <- writeResult{count: count, err: writeErr}
+	}()
+	payload := make([]byte, 5)
+	if _, err := io.ReadFull(readerFunc(c.ReadDown), payload); err != nil {
+		t.Fatal(err)
+	}
+	written := <-result
+	if written.count != 5 || !errors.Is(written.err, ErrQuotaExceeded) {
+		t.Fatalf("expected five bytes and quota error, got %d, %v", written.count, written.err)
+	}
+	if count, err := c.WriteUp([]byte("x")); count != 0 || !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("expected exhausted shared quota, got %d, %v", count, err)
 	}
 }
 

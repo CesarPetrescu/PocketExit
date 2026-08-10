@@ -22,6 +22,8 @@ func setValidEnvironment(t *testing.T) {
 	t.Setenv("OPEN_TIMEOUT", "45s")
 	t.Setenv("IDLE_TIMEOUT", "2m")
 	t.Setenv("MAX_CIRCUITS_PER_NODE", "128")
+	t.Setenv("MAX_BYTES_PER_CIRCUIT", "1073741824")
+	t.Setenv("AUDIT_LOG_PATH", "/tmp/pocketexit-audit-test.jsonl")
 	t.Setenv("ALLOW_PRIVATE_DESTINATIONS", "false")
 	t.Setenv("LOG_JSON", "true")
 }
@@ -66,6 +68,7 @@ func TestLoadRejectsUnsafeRangesAndCredentials(t *testing.T) {
 	}{
 		{name: "privileged UDP port", key: "UDP_PORT_START", value: "53"},
 		{name: "zero circuits", key: "MAX_CIRCUITS_PER_NODE", value: "0"},
+		{name: "tiny byte quota", key: "MAX_BYTES_PER_CIRCUIT", value: "1000"},
 		{name: "oversized SOCKS username", key: "SOCKS_USERNAME", value: strings.Repeat("u", 256)},
 		{name: "short admin token", key: "ADMIN_TOKEN", value: "short"},
 		{name: "short SOCKS password", key: "SOCKS_PASSWORD", value: "short"},

@@ -26,8 +26,10 @@ type Config struct {
 	OpenTimeout              time.Duration
 	IdleTimeout              time.Duration
 	MaxCircuitsPerNode       int
+	MaxBytesPerCircuit       int64
 	AllowPrivateDestinations bool
 	LogJSON                  bool
+	AuditLogPath             string
 }
 
 func Load() (Config, error) {
@@ -40,6 +42,7 @@ func Load() (Config, error) {
 		SOCKSUsername:   env("SOCKS_USERNAME", "proxy"),
 		SOCKSPassword:   env("SOCKS_PASSWORD", "change-me-proxy"),
 		AgentTokens:     map[string]string{},
+		AuditLogPath:    env("AUDIT_LOG_PATH", "/data/audit.jsonl"),
 	}
 
 	var err error
@@ -62,6 +65,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.MaxCircuitsPerNode, err = envInt("MAX_CIRCUITS_PER_NODE", 128); err != nil {
+		return Config{}, err
+	}
+	if cfg.MaxBytesPerCircuit, err = envInt64("MAX_BYTES_PER_CIRCUIT", 1<<30); err != nil {
 		return Config{}, err
 	}
 	if cfg.AllowPrivateDestinations, err = envBool("ALLOW_PRIVATE_DESTINATIONS", false); err != nil {
@@ -95,6 +101,12 @@ func Load() (Config, error) {
 	}
 	if cfg.MaxCircuitsPerNode < 1 || cfg.MaxCircuitsPerNode > 65535 {
 		return Config{}, fmt.Errorf("MAX_CIRCUITS_PER_NODE must be between 1 and 65535")
+	}
+	if cfg.MaxBytesPerCircuit < 1<<20 {
+		return Config{}, fmt.Errorf("MAX_BYTES_PER_CIRCUIT must be at least 1048576")
+	}
+	if !strings.HasPrefix(cfg.AuditLogPath, "/") || strings.ContainsRune(cfg.AuditLogPath, '\x00') {
+		return Config{}, fmt.Errorf("AUDIT_LOG_PATH must be an absolute path")
 	}
 	if cfg.NodeOfflineAfter <= 0 || cfg.CommandWait <= 0 || cfg.OpenTimeout <= 0 || cfg.IdleTimeout <= 0 {
 		return Config{}, fmt.Errorf("timeouts must be positive")
@@ -162,6 +174,18 @@ func envInt(key string, fallback int) (int, error) {
 		return fallback, nil
 	}
 	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func envInt64(key string, fallback int64) (int64, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("parse %s: %w", key, err)
 	}

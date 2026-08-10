@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -17,7 +18,11 @@ import (
 	"github.com/CesarPetrescu/pocket-exit/backend/internal/config"
 	"github.com/CesarPetrescu/pocket-exit/backend/internal/model"
 	"github.com/CesarPetrescu/pocket-exit/backend/internal/nodes"
+	"github.com/coder/websocket"
+	"github.com/skip2/go-qrcode"
 )
+
+const circuitWebSocketProtocol = "pocketexit.circuit.v1"
 
 type Server struct {
 	config   config.Config
@@ -35,6 +40,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/health", s.health)
 	mux.HandleFunc("GET /api/v1/nodes", s.admin(s.listNodes))
 	mux.HandleFunc("PATCH /api/v1/nodes/{nodeID}", s.admin(s.updateNode))
+	mux.HandleFunc("GET /api/v1/nodes/{nodeID}/onboarding", s.admin(s.onboarding))
 	mux.HandleFunc("GET /api/v1/circuits", s.admin(s.listCircuits))
 	mux.HandleFunc("DELETE /api/v1/circuits/{circuitID}", s.admin(s.closeCircuit))
 	mux.HandleFunc("GET /api/v1/metrics", s.admin(s.metrics))
@@ -42,10 +48,57 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /agent/v1/heartbeat", s.heartbeat)
 	mux.HandleFunc("GET /agent/v1/control", s.control)
 	mux.HandleFunc("POST /agent/v1/circuits/{circuitID}/status", s.circuitStatus)
+	mux.HandleFunc("GET /agent/v1/circuits/{circuitID}/ws", s.circuitWebSocket)
 	mux.HandleFunc("GET /agent/v1/circuits/{circuitID}/down", s.circuitDown)
 	mux.HandleFunc("POST /agent/v1/circuits/{circuitID}/up", s.circuitUp)
 
 	return s.recoverPanic(s.requestLog(s.securityHeaders(mux)))
+}
+
+func (s *Server) circuitWebSocket(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.authorizedCircuit(w, r)
+	if !ok {
+		return
+	}
+	connection, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		Subprotocols:    []string{circuitWebSocketProtocol},
+		CompressionMode: websocket.CompressionDisabled,
+	})
+	if err != nil {
+		s.logger.Debug("agent WebSocket upgrade failed", "circuit_id", c.ID(), "error", err)
+		return
+	}
+	defer connection.CloseNow()
+	if connection.Subprotocol() != circuitWebSocketProtocol {
+		_ = connection.Close(websocket.StatusPolicyViolation, "required subprotocol missing")
+		return
+	}
+	connection.SetReadLimit(1 << 20)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := websocket.NetConn(ctx, connection, websocket.MessageBinary)
+	defer stream.Close()
+
+	result := make(chan error, 2)
+	go func() {
+		_, copyErr := io.CopyBuffer(writerFunc(c.WriteUp), stream, make([]byte, 64*1024))
+		_ = c.CloseUp()
+		result <- copyErr
+	}()
+	go func() {
+		_, copyErr := io.CopyBuffer(stream, readerFunc(c.ReadDown), make([]byte, 64*1024))
+		result <- copyErr
+	}()
+
+	select {
+	case <-c.Done():
+	case copyErr := <-result:
+		if copyErr != nil && !isExpectedStreamError(copyErr) {
+			s.logger.Debug("agent WebSocket stream ended", "circuit_id", c.ID(), "error", copyErr)
+		}
+	}
+	c.Close(nil)
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -208,6 +261,51 @@ func (s *Server) listNodes(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"nodes": s.nodes.List()})
 }
 
+func (s *Server) onboarding(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.PathValue("nodeID")
+	token, ok := s.config.AgentTokens[nodeID]
+	if !ok {
+		writeError(w, http.StatusNotFound, "node is not configured")
+		return
+	}
+	query := url.Values{
+		"v":      {"1"},
+		"server": {"https://" + s.config.PublicProxyHost},
+		"node":   {nodeID},
+		"token":  {token},
+	}
+	onboardingURI := (&url.URL{Scheme: "pocketexit", Host: "configure", RawQuery: query.Encode()}).String()
+	code, err := qrcode.New(onboardingURI, qrcode.Medium)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not generate onboarding QR")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]string{
+		"node_id":        nodeID,
+		"onboarding_uri": onboardingURI,
+		"qr_svg":         qrSVG(code.Bitmap()),
+	})
+}
+
+func qrSVG(bitmap [][]bool) string {
+	size := len(bitmap)
+	var path strings.Builder
+	for y, row := range bitmap {
+		for x, dark := range row {
+			if dark {
+				fmt.Fprintf(&path, "M%d %dh1v1h-1z", x, y)
+			}
+		}
+	}
+	return fmt.Sprintf(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" shape-rendering="crispEdges"><rect width="100%%" height="100%%" fill="white"/><path d="%s" fill="black"/></svg>`,
+		size,
+		size,
+		path.String(),
+	)
+}
+
 type updateNodeRequest struct {
 	Enabled       *bool         `json:"enabled"`
 	ControlPolicy *model.Policy `json:"control_policy"`
@@ -228,6 +326,7 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, err.Error())
 		return
 	}
+	s.logger.Info("node settings updated", "event", "node_update", "node_id", node.NodeID)
 	writeJSON(w, http.StatusOK, node)
 }
 
@@ -246,6 +345,7 @@ func (s *Server) closeCircuit(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	_ = s.nodes.QueueCommand(ctx, c.NodeID(), model.Command{Type: model.CommandClose, CircuitID: id})
 	c.Close(nil)
+	s.logger.Info("circuit closed by administrator", "event", "admin_circuit_close", "circuit_id", id, "node_id", c.NodeID())
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -272,12 +372,17 @@ func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) authenticateAgent(r *http.Request, nodeID string) bool {
-	return s.nodes.Authenticate(nodeID, bearerToken(r), s.config.AgentTokens)
+	authenticated := s.nodes.Authenticate(nodeID, bearerToken(r), s.config.AgentTokens)
+	if !authenticated {
+		s.logger.Warn("agent authentication failed", "event", "agent_auth_failed", "node_id", nodeID)
+	}
+	return authenticated
 }
 
 func (s *Server) admin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !secureEqual(bearerToken(r), s.config.AdminToken) {
+			s.logger.Warn("admin authentication failed", "event", "admin_auth_failed", "path", r.URL.Path)
 			writeError(w, http.StatusUnauthorized, "invalid admin token")
 			return
 		}
@@ -388,6 +493,14 @@ func isExpectedStreamError(err error) bool {
 	}
 	return false
 }
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(payload []byte) (int, error) { return f(payload) }
+
+type readerFunc func([]byte) (int, error)
+
+func (f readerFunc) Read(payload []byte) (int, error) { return f(payload) }
 
 func parsePort(value string) (int, error) {
 	port, err := strconv.Atoi(value)

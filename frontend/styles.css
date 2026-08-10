@@ -213,6 +213,8 @@ main { padding: 2rem 0 4rem; }
 .node-card { border-radius: 1rem; overflow: hidden; }
 .node-card.disabled { opacity: .68; }
 .node-header { display: flex; justify-content: space-between; gap: 1rem; padding: 1.05rem; border-bottom: 1px solid var(--border); }
+.node-actions { display: flex; align-items: center; gap: .65rem; }
+.pair-button { min-height: 36px; padding: .4rem .65rem; font-size: .7rem; }
 .node-title { display: flex; align-items: center; gap: .65rem; }
 .node-title h3 { font-size: 1.05rem; }
 .node-meta { margin-top: .3rem; color: var(--muted); font-size: .7rem; }
@@ -247,6 +249,19 @@ tbody tr:hover { background: rgba(56, 189, 248, .035); }
 .empty-cell { border: 0; }
 
 footer { padding: 1.5rem 0 2rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .7rem; }
+dialog {
+  width: min(92vw, 430px);
+  padding: 0;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 1.1rem;
+  background: var(--panel);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .55);
+}
+dialog::backdrop { background: rgba(2, 6, 23, .82); backdrop-filter: blur(5px); }
+.pair-dialog-content { display: grid; gap: 1rem; padding: 1.25rem; }
+#pair-qr { display: block; width: min(100%, 300px); margin-inline: auto; border-radius: .75rem; }
+.pair-warning { margin: 0; color: var(--warning); font-size: .76rem; line-height: 1.45; }
 #toast {
   position: fixed;
   right: 1.25rem;
@@ -288,6 +303,8 @@ footer { padding: 1.5rem 0 2rem; border-top: 1px solid var(--border); color: var
   .summary-card strong { font-size: 1.35rem; }
   #traffic-chart { height: 130px; }
   .network-grid, .policy-grid { grid-template-columns: 1fr; }
+  .node-header { align-items: start; flex-direction: column; }
+  .node-actions { width: 100%; justify-content: space-between; }
   .node-stats { grid-template-columns: 1fr 1fr; }
   .section-heading { align-items: end; }
   .table-shell { border: 0; background: transparent; box-shadow: none; }

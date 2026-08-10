@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -106,9 +107,15 @@ func (s *Server) handleConnection(ctx context.Context, connection net.Conn) {
 
 	selected, err := s.negotiate(reader, connection)
 	if err != nil {
-		s.logger.Debug("SOCKS negotiation failed", "remote", connection.RemoteAddr(), "error", err)
+		s.logger.Warn(
+			"SOCKS authentication or negotiation failed",
+			"event", "socks_auth_failed",
+			"remote", connection.RemoteAddr(),
+			"error", err,
+		)
 		return
 	}
+	s.logger.Info("SOCKS client authenticated", "event", "socks_auth_ok", "remote", connection.RemoteAddr())
 	request, err := readRequest(reader)
 	if err != nil {
 		_ = writeReply(connection, replyAddressNotSupported, socksAddress{})
@@ -273,7 +280,15 @@ func (s *Server) handleTCP(ctx context.Context, connection net.Conn, bufferedCli
 	if !policy.Valid() {
 		policy = node.ExitPolicy
 	}
-	c, err := s.circuits.CreateLimited(node.NodeID, model.ProtocolTCP, target.host, target.port, policy, s.config.MaxCircuitsPerNode)
+	c, err := s.circuits.CreateLimitedWithQuota(
+		node.NodeID,
+		model.ProtocolTCP,
+		target.host,
+		target.port,
+		policy,
+		s.config.MaxCircuitsPerNode,
+		s.config.MaxBytesPerCircuit,
+	)
 	if err != nil {
 		_ = writeReply(connection, replyGeneralFailure, socksAddress{})
 		return
@@ -281,6 +296,15 @@ func (s *Server) handleTCP(ctx context.Context, connection net.Conn, bufferedCli
 	defer func() {
 		c.Close(nil)
 		s.queueClose(c)
+		view := c.View()
+		s.logger.Info(
+			"circuit closed",
+			"event", "circuit_close",
+			"circuit_id", view.ID,
+			"node_id", view.NodeID,
+			"bytes_up", view.BytesUp,
+			"bytes_down", view.BytesDown,
+		)
 	}()
 
 	command := model.Command{
@@ -305,6 +329,14 @@ func (s *Server) handleTCP(ctx context.Context, connection net.Conn, bufferedCli
 		_ = writeReply(connection, replyConnectionRefused, socksAddress{})
 		return
 	}
+	s.logger.Info(
+		"circuit opened",
+		"event", "circuit_open",
+		"circuit_id", c.ID(),
+		"node_id", node.NodeID,
+		"target", net.JoinHostPort(target.host, strconv.Itoa(target.port)),
+		"exit_policy", policy,
+	)
 	if err := writeReply(connection, replySuccess, socksAddress{typeCode: addressIPv4, host: "0.0.0.0", port: 0}); err != nil {
 		return
 	}
@@ -564,7 +596,15 @@ func (a *udpAssociation) getOrCreateTarget(ctx context.Context, address socksAdd
 	if !policy.Valid() {
 		policy = node.ExitPolicy
 	}
-	c, err := a.server.circuits.CreateLimited(node.NodeID, model.ProtocolUDP, address.host, address.port, policy, a.server.config.MaxCircuitsPerNode)
+	c, err := a.server.circuits.CreateLimitedWithQuota(
+		node.NodeID,
+		model.ProtocolUDP,
+		address.host,
+		address.port,
+		policy,
+		a.server.config.MaxCircuitsPerNode,
+		a.server.config.MaxBytesPerCircuit,
+	)
 	if err != nil {
 		return nil, err
 	}

@@ -22,6 +22,7 @@ import com.photonspark.pocketexit.data.NetworkKind
 import com.photonspark.pocketexit.data.RuntimeStore
 import com.photonspark.pocketexit.network.CronetTransport
 import com.photonspark.pocketexit.network.NetworkMonitor
+import com.photonspark.pocketexit.network.WebSocketTransport
 import com.photonspark.pocketexit.proxy.CircuitManager
 import com.photonspark.pocketexit.ui.MainActivity
 import kotlinx.coroutines.CancellationException
@@ -112,7 +113,8 @@ class ExitNodeService : Service() {
         }
 
         val transport = CronetTransport(this@ExitNodeService, initialConfig.normalizedServerUrl)
-        val circuits = CircuitManager(this, preferences, networkMonitor, transport)
+        val socketTransport = WebSocketTransport(initialConfig.normalizedServerUrl)
+        val circuits = CircuitManager(this, preferences, networkMonitor, transport, socketTransport)
         RuntimeStore.update {
             it.copy(running = true, registered = false, statusMessage = "Connecting", lastError = "")
         }
@@ -123,6 +125,7 @@ class ExitNodeService : Service() {
             controlLoop(transport, circuits)
         } finally {
             circuits.closeAll()
+            socketTransport.close()
             transport.close()
             RuntimeStore.update {
                 it.copy(

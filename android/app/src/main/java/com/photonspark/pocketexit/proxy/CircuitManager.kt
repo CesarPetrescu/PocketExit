@@ -7,6 +7,7 @@ import com.photonspark.pocketexit.data.RuntimeStore
 import com.photonspark.pocketexit.network.CronetTransport
 import com.photonspark.pocketexit.network.DestinationAcl
 import com.photonspark.pocketexit.network.NetworkMonitor
+import com.photonspark.pocketexit.network.WebSocketTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -21,15 +22,12 @@ import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
-import java.io.FilterInputStream
 import java.io.IOException
-import java.io.InputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.net.SocketException
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -39,6 +37,7 @@ class CircuitManager(
     private val preferences: AppPreferences,
     private val networkMonitor: NetworkMonitor,
     private val transport: CronetTransport,
+    private val socketTransport: WebSocketTransport,
 ) {
     private data class AgentIdentity(
         val nodeId: String,
@@ -138,32 +137,14 @@ class CircuitManager(
             DestinationAcl.resolve(exit.network, command.targetHost, command.allowPrivate)
         }
         val socket = connectTcp(exit.network, addresses, command.targetPort)
-        var down: CronetTransport.RunningRequest? = null
-        var up: CronetTransport.RunningRequest? = null
+        var session: WebSocketTransport.Session? = null
         try {
             val control = controlNetwork()
-            val path = circuitPath(command.circuitId)
-            val downRequest = transport.download(
-                path = "$path/down?node_id=${query(identity.nodeId)}",
+            session = socketTransport.open(
+                path = "${circuitPath(command.circuitId)}/ws?node_id=${query(identity.nodeId)}",
                 token = identity.token,
                 network = control.network,
-            ) { bytes ->
-                socket.getOutputStream().write(bytes)
-                downloaded.addAndGet(bytes.size.toLong())
-                publishCounters()
-            }
-            down = downRequest
-            val countedInput = CountingInputStream(socket.getInputStream()) { count ->
-                uploaded.addAndGet(count.toLong())
-                publishCounters()
-            }
-            val upRequest = transport.upload(
-                path = "$path/up?node_id=${query(identity.nodeId)}",
-                token = identity.token,
-                network = control.network,
-                source = countedInput,
             )
-            up = upRequest
 
             postStatus(
                 circuitId = command.circuitId,
@@ -174,12 +155,10 @@ class CircuitManager(
                 required = true,
             )
             onOpened()
-
-            awaitEither(downRequest, upRequest)
+            relayTcp(socket, session)
         } finally {
             runCatching { socket.close() }
-            down?.cancel()
-            up?.cancel()
+            session?.close()
         }
     }
 
@@ -193,37 +172,16 @@ class CircuitManager(
             DestinationAcl.resolve(exit.network, command.targetHost, command.allowPrivate).first()
         }
         val socket = DatagramSocket(null)
-        var down: CronetTransport.RunningRequest? = null
-        var up: CronetTransport.RunningRequest? = null
+        var session: WebSocketTransport.Session? = null
         try {
             exit.network.bindSocket(socket)
             socket.connect(InetSocketAddress(address, command.targetPort))
             val control = controlNetwork()
-            val decoder = DatagramCodec.Decoder()
-            val path = circuitPath(command.circuitId)
-
-            val downRequest = transport.download(
-                path = "$path/down?node_id=${query(identity.nodeId)}",
+            session = socketTransport.open(
+                path = "${circuitPath(command.circuitId)}/ws?node_id=${query(identity.nodeId)}",
                 token = identity.token,
                 network = control.network,
-            ) { bytes ->
-                downloaded.addAndGet(bytes.size.toLong())
-                decoder.feed(bytes).forEach { payload ->
-                    socket.send(DatagramPacket(payload, payload.size))
-                }
-                publishCounters()
-            }
-            down = downRequest
-            val upRequest = transport.upload(
-                path = "$path/up?node_id=${query(identity.nodeId)}",
-                token = identity.token,
-                network = control.network,
-                source = DatagramFrameInputStream(socket) { count ->
-                    uploaded.addAndGet(count.toLong())
-                    publishCounters()
-                },
             )
-            up = upRequest
 
             postStatus(
                 circuitId = command.circuitId,
@@ -234,29 +192,80 @@ class CircuitManager(
                 required = true,
             )
             onOpened()
-
-            awaitEither(downRequest, upRequest)
+            relayUdp(socket, session)
         } finally {
             socket.close()
-            down?.cancel()
-            up?.cancel()
+            session?.close()
         }
     }
 
-    private suspend fun awaitEither(
-        down: CronetTransport.RunningRequest,
-        up: CronetTransport.RunningRequest,
-    ) = coroutineScope {
-        val downWait = async { down.completion.await() }
-        val upWait = async { up.completion.await() }
+    private suspend fun relayTcp(socket: Socket, session: WebSocketTransport.Session) = coroutineScope {
+        val downWait = async(Dispatchers.IO) {
+            for (bytes in session.incoming) {
+                socket.getOutputStream().write(bytes)
+                downloaded.addAndGet(bytes.size.toLong())
+                publishCounters()
+            }
+        }
+        val upWait = async(Dispatchers.IO) {
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val count = socket.getInputStream().read(buffer)
+                if (count < 0) break
+                session.send(buffer.copyOf(count))
+                uploaded.addAndGet(count.toLong())
+                publishCounters()
+            }
+        }
+        val closedWait = async { session.awaitClosed() }
         try {
             select<Unit> {
                 downWait.onAwait { Unit }
                 upWait.onAwait { Unit }
+                closedWait.onAwait { Unit }
             }
         } finally {
+            runCatching { socket.close() }
             downWait.cancel()
             upWait.cancel()
+            closedWait.cancel()
+        }
+    }
+
+    private suspend fun relayUdp(socket: DatagramSocket, session: WebSocketTransport.Session) = coroutineScope {
+        val decoder = DatagramCodec.Decoder()
+        val downWait = async(Dispatchers.IO) {
+            for (bytes in session.incoming) {
+                downloaded.addAndGet(bytes.size.toLong())
+                decoder.feed(bytes).forEach { payload ->
+                    socket.send(DatagramPacket(payload, payload.size))
+                }
+                publishCounters()
+            }
+        }
+        val upWait = async(Dispatchers.IO) {
+            val payload = ByteArray(DatagramCodec.MAX_DATAGRAM_SIZE)
+            while (true) {
+                val packet = DatagramPacket(payload, payload.size)
+                socket.receive(packet)
+                val frame = DatagramCodec.frame(payload.copyOf(packet.length))
+                session.send(frame)
+                uploaded.addAndGet(frame.size.toLong())
+                publishCounters()
+            }
+        }
+        val closedWait = async { session.awaitClosed() }
+        try {
+            select<Unit> {
+                downWait.onAwait { Unit }
+                upWait.onAwait { Unit }
+                closedWait.onAwait { Unit }
+            }
+        } finally {
+            socket.close()
+            downWait.cancel()
+            upWait.cancel()
+            closedWait.cancel()
         }
     }
 
@@ -347,51 +356,6 @@ class CircuitManager(
     }
 
     private fun query(value: String): String = URLEncoder.encode(value, Charsets.UTF_8.name())
-
-    private class CountingInputStream(
-        source: InputStream,
-        private val onRead: (Int) -> Unit,
-    ) : FilterInputStream(source) {
-        override fun read(): Int = super.read().also { if (it >= 0) onRead(1) }
-
-        override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
-            super.read(buffer, offset, length).also { if (it > 0) onRead(it) }
-    }
-
-    private class DatagramFrameInputStream(
-        private val socket: DatagramSocket,
-        private val onFrame: (Int) -> Unit,
-    ) : InputStream() {
-        private var frame = ByteArray(0)
-        private var offset = 0
-
-        override fun read(): Int {
-            val one = ByteArray(1)
-            return if (read(one, 0, 1) < 0) -1 else one[0].toInt() and 0xff
-        }
-
-        override fun read(target: ByteArray, targetOffset: Int, length: Int): Int {
-            if (length == 0) return 0
-            if (offset >= frame.size) receiveFrame()
-            val count = minOf(length, frame.size - offset)
-            frame.copyInto(target, targetOffset, offset, offset + count)
-            offset += count
-            return count
-        }
-
-        private fun receiveFrame() {
-            val payload = ByteArray(DatagramCodec.MAX_DATAGRAM_SIZE)
-            val packet = DatagramPacket(payload, payload.size)
-            try {
-                socket.receive(packet)
-            } catch (error: SocketException) {
-                throw IOException("UDP socket closed", error)
-            }
-            frame = DatagramCodec.frame(payload.copyOf(packet.length))
-            offset = 0
-            onFrame(frame.size)
-        }
-    }
 
     companion object {
         private val CIRCUIT_ID_REGEX = Regex("[a-f0-9]{32}")

@@ -1,6 +1,7 @@
 package com.photonspark.pocketexit.ui
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -69,10 +70,12 @@ import com.photonspark.pocketexit.data.AppPreferences
 import com.photonspark.pocketexit.data.NetworkSnapshot
 import com.photonspark.pocketexit.data.Policy
 import com.photonspark.pocketexit.data.RuntimeStore
+import com.photonspark.pocketexit.data.withOnboardingUri
 import com.photonspark.pocketexit.service.ExitNodeService
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.pow
@@ -89,16 +92,32 @@ private val Warning = Color(0xFFFBBF24)
 
 class MainActivity : ComponentActivity() {
     private lateinit var preferences: AppPreferences
+    private val onboardingUri = MutableStateFlow<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         preferences = AppPreferences(this)
+        onboardingUri.value = intent?.dataString
         setContent {
+            val pendingOnboarding by onboardingUri.collectAsState()
             PocketExitTheme {
                 NotificationPermission()
-                PocketExitScreen(preferences)
+                PocketExitScreen(
+                    preferences = preferences,
+                    onboardingUri = pendingOnboarding,
+                    onOnboardingConsumed = {
+                        onboardingUri.value = null
+                        intent?.data = null
+                    },
+                )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        onboardingUri.value = intent.dataString
     }
 
     override fun onDestroy() {
@@ -126,15 +145,29 @@ private fun NotificationPermission() {
 private enum class AppPage { OVERVIEW, SETTINGS }
 
 @Composable
-private fun PocketExitScreen(preferences: AppPreferences) {
+private fun PocketExitScreen(
+    preferences: AppPreferences,
+    onboardingUri: String?,
+    onOnboardingConsumed: () -> Unit,
+) {
     val savedConfig by preferences.state.collectAsState()
     val runtime by RuntimeStore.state.collectAsState()
     var form by remember { mutableStateOf(savedConfig) }
     var message by remember { mutableStateOf("") }
     var pageName by rememberSaveable { mutableStateOf(AppPage.OVERVIEW.name) }
+    var onboardingConfig by remember { mutableStateOf<AgentConfig?>(null) }
+    var onboardingError by remember { mutableStateOf("") }
     val context = LocalContext.current
 
     LaunchedEffect(savedConfig) { form = savedConfig }
+    LaunchedEffect(onboardingUri) {
+        if (onboardingUri != null) {
+            runCatching { savedConfig.withOnboardingUri(onboardingUri) }
+                .onSuccess { onboardingConfig = it }
+                .onFailure { onboardingError = it.message ?: "Invalid onboarding link" }
+            onOnboardingConsumed()
+        }
+    }
     LaunchedEffect(message) {
         if (message.isNotBlank()) {
             delay(3_500)
@@ -199,6 +232,47 @@ private fun PocketExitScreen(preferences: AppPreferences) {
             )
         }
     }
+
+    onboardingConfig?.let { candidate ->
+        OnboardingDialog(
+            config = candidate,
+            onConfirm = {
+                if (runtime.running) ExitNodeService.stop(context)
+                preferences.save(candidate)
+                form = candidate
+                onboardingConfig = null
+                pageName = AppPage.SETTINGS.name
+                message = "Configuration imported · review and start the agent"
+            },
+            onDismiss = { onboardingConfig = null },
+        )
+    }
+    if (onboardingError.isNotBlank()) {
+        AlertDialog(
+            onDismissRequest = { onboardingError = "" },
+            title = { Text("Could not import configuration") },
+            text = { Text(onboardingError) },
+            confirmButton = { TextButton(onClick = { onboardingError = "" }) { Text("OK") } },
+        )
+    }
+}
+
+@Composable
+private fun OnboardingDialog(config: AgentConfig, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Pair this phone?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Verify these details before importing the agent token.", color = Muted)
+                Metric("SERVER", config.serverUrl)
+                Metric("NODE", config.nodeId)
+                Text("The agent remains stopped until you review settings and start it.", color = Warning)
+            }
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Import") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable

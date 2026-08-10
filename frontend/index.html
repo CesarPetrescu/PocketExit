@@ -113,6 +113,18 @@
   </main>
 
   <footer>Private infrastructure, visible only to authenticated operators.</footer>
+  <dialog id="pair-dialog" aria-labelledby="pair-title">
+    <div class="pair-dialog-content">
+      <div>
+        <p class="eyebrow">SECURE ONBOARDING</p>
+        <h2 id="pair-title">Pair Android agent</h2>
+        <p id="pair-detail" class="section-copy"></p>
+      </div>
+      <img id="pair-qr" alt="PocketExit agent configuration QR code">
+      <p class="pair-warning">Scan with the phone's normal camera, verify the server and node in PocketExit, then confirm. This QR contains that node's bearer token; close it when finished.</p>
+      <button id="pair-close" class="primary" type="button">Done</button>
+    </div>
+  </dialog>
   <div id="toast" role="status" aria-live="polite"></div>
   <noscript>PocketExit requires JavaScript to load fleet data.</noscript>
   <script src="/app.js" defer></script>

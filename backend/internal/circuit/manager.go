@@ -16,6 +16,7 @@ import (
 )
 
 var ErrNotFound = errors.New("circuit not found")
+var ErrQuotaExceeded = errors.New("circuit byte quota exceeded")
 
 type Circuit struct {
 	id         string
@@ -45,9 +46,11 @@ type Circuit struct {
 
 	bytesUp   atomic.Uint64
 	bytesDown atomic.Uint64
+	quotaUsed atomic.Uint64
+	maxBytes  uint64
 }
 
-func newCircuit(nodeID string, protocol model.CircuitProtocol, host string, port int, policy model.Policy) (*Circuit, error) {
+func newCircuit(nodeID string, protocol model.CircuitProtocol, host string, port int, policy model.Policy, maxBytes int64) (*Circuit, error) {
 	id, err := randomID()
 	if err != nil {
 		return nil, err
@@ -71,6 +74,7 @@ func newCircuit(nodeID string, protocol model.CircuitProtocol, host string, port
 		upWriter:   upWriter,
 		ready:      make(chan error, 1),
 		done:       make(chan struct{}),
+		maxBytes:   uint64(max(0, maxBytes)),
 	}, nil
 }
 
@@ -117,9 +121,17 @@ func (c *Circuit) MarkFailed(err error) {
 func (c *Circuit) WriteDown(payload []byte) (int, error) {
 	c.downMu.Lock()
 	defer c.downMu.Unlock()
-	n, err := c.downWriter.Write(payload)
+	claimed := c.claimQuota(len(payload))
+	if claimed == 0 && len(payload) > 0 {
+		return 0, ErrQuotaExceeded
+	}
+	n, err := c.downWriter.Write(payload[:claimed])
+	c.refundQuota(claimed - n)
 	c.bytesDown.Add(uint64(n))
 	c.touch()
+	if err == nil && claimed < len(payload) {
+		err = ErrQuotaExceeded
+	}
 	return n, err
 }
 
@@ -134,10 +146,40 @@ func (c *Circuit) CloseDown() error {
 func (c *Circuit) WriteUp(payload []byte) (int, error) {
 	c.upMu.Lock()
 	defer c.upMu.Unlock()
-	n, err := c.upWriter.Write(payload)
+	claimed := c.claimQuota(len(payload))
+	if claimed == 0 && len(payload) > 0 {
+		return 0, ErrQuotaExceeded
+	}
+	n, err := c.upWriter.Write(payload[:claimed])
+	c.refundQuota(claimed - n)
 	c.bytesUp.Add(uint64(n))
 	c.touch()
+	if err == nil && claimed < len(payload) {
+		err = ErrQuotaExceeded
+	}
 	return n, err
+}
+
+func (c *Circuit) claimQuota(requested int) int {
+	if requested <= 0 || c.maxBytes == 0 {
+		return requested
+	}
+	for {
+		used := c.quotaUsed.Load()
+		if used >= c.maxBytes {
+			return 0
+		}
+		claimed := min(uint64(requested), c.maxBytes-used)
+		if c.quotaUsed.CompareAndSwap(used, used+claimed) {
+			return int(claimed)
+		}
+	}
+}
+
+func (c *Circuit) refundQuota(count int) {
+	if count > 0 && c.maxBytes > 0 {
+		c.quotaUsed.Add(^uint64(count - 1))
+	}
 }
 
 func (c *Circuit) ReadUp(payload []byte) (int, error) {
@@ -211,7 +253,12 @@ func (m *Manager) Create(nodeID string, protocol model.CircuitProtocol, host str
 // CreateLimited atomically enforces a server-side per-node active-circuit
 // ceiling. A non-positive limit disables the ceiling for tests/internal use.
 func (m *Manager) CreateLimited(nodeID string, protocol model.CircuitProtocol, host string, port int, policy model.Policy, limit int) (*Circuit, error) {
-	circuit, err := newCircuit(nodeID, protocol, host, port, policy)
+	return m.CreateLimitedWithQuota(nodeID, protocol, host, port, policy, limit, 0)
+}
+
+// CreateLimitedWithQuota atomically enforces concurrency and byte ceilings.
+func (m *Manager) CreateLimitedWithQuota(nodeID string, protocol model.CircuitProtocol, host string, port int, policy model.Policy, limit int, maxBytes int64) (*Circuit, error) {
+	circuit, err := newCircuit(nodeID, protocol, host, port, policy, maxBytes)
 	if err != nil {
 		return nil, err
 	}

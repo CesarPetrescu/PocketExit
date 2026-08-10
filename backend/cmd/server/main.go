@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -22,7 +23,11 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	logger := newLogger(cfg.LogJSON)
+	logger, auditFile, err := newLogger(cfg.LogJSON, cfg.AuditLogPath)
+	if err != nil {
+		panic(err)
+	}
+	defer auditFile.Close()
 	registry := nodes.NewRegistry(cfg.NodeOfflineAfter, cfg.MaxCircuitsPerNode)
 	circuits := circuit.NewManager()
 	api := httpapi.New(cfg, registry, circuits, logger)
@@ -89,13 +94,18 @@ func pruneLoop(ctx context.Context, manager *circuit.Manager, logger *slog.Logge
 	}
 }
 
-func newLogger(jsonOutput bool) *slog.Logger {
+func newLogger(jsonOutput bool, auditPath string) (*slog.Logger, io.Closer, error) {
+	auditFile, err := os.OpenFile(auditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, nil, err
+	}
+	output := io.MultiWriter(os.Stdout, auditFile)
 	options := &slog.HandlerOptions{Level: slog.LevelInfo}
 	if os.Getenv("LOG_LEVEL") == "debug" {
 		options.Level = slog.LevelDebug
 	}
 	if jsonOutput {
-		return slog.New(slog.NewJSONHandler(os.Stdout, options))
+		return slog.New(slog.NewJSONHandler(output, options)), auditFile, nil
 	}
-	return slog.New(slog.NewTextHandler(os.Stdout, options))
+	return slog.New(slog.NewTextHandler(output, options)), auditFile, nil
 }

@@ -33,4 +33,16 @@ class PolicySelectorTest {
         val state = NetworkAvailability(true, true, true, true)
         assertEquals(NetworkKind.WIFI, PolicySelector.select(Policy.AUTO, state))
     }
+
+    @Test
+    fun preferredRouteTracksValidationChanges() {
+        val wifiOnly = NetworkAvailability(true, true, false, false)
+        val both = NetworkAvailability(true, true, true, true)
+        val cellularOnly = NetworkAvailability(false, false, true, true)
+        assertEquals(NetworkKind.WIFI, PolicySelector.select(Policy.CELLULAR_PREFERRED, wifiOnly))
+        assertEquals(NetworkKind.CELLULAR, PolicySelector.select(Policy.CELLULAR_PREFERRED, both))
+        assertEquals(NetworkKind.CELLULAR, PolicySelector.select(Policy.CELLULAR_PREFERRED, cellularOnly))
+        assertEquals(NetworkKind.WIFI, PolicySelector.select(Policy.WIFI_PREFERRED, both))
+        assertEquals(NetworkKind.CELLULAR, PolicySelector.select(Policy.WIFI_PREFERRED, cellularOnly))
+    }
 }

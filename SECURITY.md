@@ -30,7 +30,19 @@ Only Nginx publishes host ports. The backend uses an internal Compose network, a
 
 ### SOCKS client transport
 
-The `:1080` endpoint is conventional SOCKS5 over raw TCP. SOCKS5 username/password authentication is not transport encryption. Unless the client reaches it through a trusted private network, VPN, SSH tunnel, or an added TLS wrapper, the credentials and any non-TLS proxied traffic can be observed or modified on the network path. Source-restrict port 1080; do not treat the SOCKS password as protected merely because authentication is enabled.
+The `:1080` endpoint is conventional SOCKS5 over raw TCP. Use it only through a
+trusted private network, VPN, or SSH tunnel. Port `:1081` exposes the same SOCKS
+service inside TLS for clients using a local wrapper such as `stunnel` or
+`gost`. Standard SOCKS clients do not automatically add this outer TLS layer.
+
+### Resource and audit controls
+
+Every circuit has a shared upload/download byte ceiling configured with
+`MAX_BYTES_PER_CIRCUIT`. Authentication outcomes, circuit lifecycle events,
+node changes, and administrative closes are written as structured JSON Lines to
+the persistent `AUDIT_LOG_PATH`. This log is durable across container restarts,
+but it is not tamper-evident and should be exported to protected storage when
+that property is required.
 
 ### Destination filtering
 
@@ -68,12 +80,10 @@ The dashboard stores the admin token in `sessionStorage`, not `localStorage`. It
 
 ## Known security limitations
 
-This MVP does not provide:
+This deployment does not provide:
 
-- native TLS wrapping for the public SOCKS5 listener;
 - mTLS or hardware-backed remote attestation;
 - account-based multi-tenancy or role-based access control;
-- persistent tamper-evident audit logs;
 - per-user bandwidth quotas;
 - automatic secret rotation;
 - automatic certificate issuance/renewal;
@@ -93,7 +103,9 @@ An attacker with a valid node token can impersonate that node ID to the agent AP
 
 ### Stolen SOCKS credentials
 
-An attacker can consume the exit fleet and mobile data. Rotate the password and use firewall restrictions. The backend does not yet maintain per-user quotas.
+An attacker can consume the exit fleet and mobile data. Rotate the password and
+use firewall restrictions. The per-circuit limit contains a single transfer but
+is not a per-user or time-window quota.
 
 ### Malicious destination
 

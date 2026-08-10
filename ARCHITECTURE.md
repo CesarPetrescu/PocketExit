@@ -24,11 +24,18 @@ Nginx is the only container with published host ports.
 | 443 | TCP | HTTPS and HTTP/2 |
 | 443 | UDP | HTTP/3/QUIC |
 | 1080 | TCP | Authenticated SOCKS5 |
+| 1081 | TLS/TCP | TLS-wrapped authenticated SOCKS5 |
 | 12000–12031 | UDP | Dynamically allocated SOCKS5 UDP relays |
 
-Nginx serves the static dashboard and reverse-proxies `/api/` and `/agent/` to the Go backend. Request and response buffering are disabled under `/agent/` so circuit bodies stream rather than accumulate on disk or in memory.
+Nginx serves the static dashboard, reverse-proxies `/api/` and `/agent/` to the
+Go backend, and upgrades circuit requests to WebSockets. Port 1080 is the raw
+SOCKS endpoint for trusted networks; port 1081 adds an outer TLS session for a
+TLS-wrapper client.
 
-HTTP/3 terminates at Nginx. Nginx forwards the private hop to Go using HTTP/1.1 over the Compose bridge network. This keeps the Go implementation dependency-free while retaining QUIC's benefits on the lossy mobile/public segment.
+HTTP/3 terminates at Nginx. Nginx forwards the private hop to Go using HTTP/1.1
+over the Compose bridge network. Control requests may use HTTP/3 while circuit
+data uses an authenticated WebSocket, which hosted connectors can relay without
+HTTP request-body streaming timeouts.
 
 ### Go backend
 
@@ -36,7 +43,7 @@ The Go process has four logical subsystems:
 
 ```text
 HTTP API ───────────────┐
-Node registry ──────────┼── Circuit manager ── streaming pipes
+Node registry ──────────┼── Circuit manager ── pipes + quotas
 SOCKS5 TCP/UDP server ──┤
 Scheduler ──────────────┘
 ```
@@ -59,7 +66,8 @@ Compose UI
     │ StateFlow
 Foreground service
     ├── NetworkMonitor
-    ├── CronetTransport
+    ├── CronetTransport (control)
+    ├── WebSocketTransport (circuit data)
     └── CircuitManager
             ├── bound TCP sockets
             └── bound UDP sockets
@@ -74,7 +82,7 @@ For control requests, Cronet binds each HTTP request to the selected `Network` h
 Two policies are evaluated independently:
 
 ```text
-control policy → network carrying heartbeats, commands, and HTTP/3 circuit streams
+control policy → network carrying heartbeats, commands, and circuit WebSockets
 exit policy    → network carrying DNS and destination TCP/UDP sockets
 ```
 
@@ -82,7 +90,7 @@ Examples:
 
 | Control | Exit | Result |
 |---|---|---|
-| Wi-Fi preferred | Cellular only | QUIC uses Wi-Fi when possible; public egress uses SIM data |
+| Wi-Fi preferred | Cellular only | Control traffic uses Wi-Fi when possible; public egress uses SIM data |
 | Cellular only | Cellular only | Entire path uses SIM data |
 | Cellular preferred | Wi-Fi only | Control survives outside Wi-Fi; destination requires Wi-Fi |
 | Automatic | Automatic | Wi-Fi first, cellular fallback |
@@ -96,14 +104,16 @@ SOCKS client TCP
   → Nginx stream proxy
   → Go SOCKS5 parser/authenticator
   → circuit down pipe
-  → Nginx HTTPS reverse proxy
-  → HTTP/3 stream over QUIC
-  → Android Cronet callback
+  → Nginx WebSocket reverse proxy
+  → authenticated binary WebSocket
+  → Android OkHttp callback
   → TCP socket bound to selected Android Network
   → destination
 ```
 
-The return direction uses a separate streaming HTTP request. One circuit therefore maps to independent HTTP/3 streams instead of multiplexing every connection inside one custom byte stream.
+The return direction shares the same full-duplex WebSocket. Each circuit has an
+independent connection, bounded Android-side buffering, ping frames, and one
+combined up/down byte quota.
 
 ## UDP data path
 
@@ -115,7 +125,9 @@ Each destination tuple within the association creates a connected Android UDP ci
 [uint16 payload length][payload]
 ```
 
-This implementation intentionally uses reliable HTTP/3 streams, not QUIC DATAGRAM or MASQUE CONNECT-UDP. It is suitable for DNS and ordinary low-volume UDP use, but real-time applications may experience head-of-line delay after loss.
+This implementation intentionally uses a reliable WebSocket, not QUIC DATAGRAM
+or MASQUE CONNECT-UDP. It is suitable for DNS and ordinary low-volume UDP use,
+but real-time applications may experience head-of-line delay after loss.
 
 ## Failure handling
 
@@ -125,10 +137,14 @@ This implementation intentionally uses reliable HTTP/3 streams, not QUIC DATAGRA
 - Circuit-open acknowledgement is required before SOCKS reports success.
 - TCP destination connect timeout is 10 seconds.
 - Backend open timeout is 45 seconds by default.
-- Circuit stream completion closes both directions.
+- WebSocket completion closes both directions.
 - Stale closed circuit records are pruned.
 - Agent restarts are serialized so two transports cannot run concurrently.
 
 ## State and scale
 
-All state is process-local and in memory. This is appropriate for three phones and a single backend instance. Horizontal replication would require shared node presence, command delivery, circuit ownership, and session affinity; those concerns are deliberately outside this MVP.
+Node, command, and circuit state is process-local and in memory. Structured
+security events are persisted as JSON Lines on the backend data volume. This is
+appropriate for three phones and one backend instance. Horizontal replication
+would require shared node presence, command delivery, circuit ownership, and
+session affinity; those concerns are deliberately outside this MVP.

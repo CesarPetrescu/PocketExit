@@ -6,7 +6,7 @@ RUN apt-get update \
     && sdkmanager "build-tools;35.0.0"
 
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-ENV PATH="$JAVA_HOME/bin:$PATH"
+ENV PATH="$JAVA_HOME/bin:$ANDROID_HOME/build-tools/35.0.0:$PATH"
 WORKDIR /workspace
 ENTRYPOINT ["./gradlew", "--no-daemon"]
 CMD ["assembleDebug"]

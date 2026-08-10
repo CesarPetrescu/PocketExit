@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate signing secrets
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE"
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_ALIAS"
+          test -n "$KEY_PASSWORD"
+          printf '%s' "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/pocketexit-release.jks"
+          chmod 600 "$RUNNER_TEMP/pocketexit-release.jks"
+      - name: Build signed APK in the pinned toolchain
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          grep -Fq "versionName = \"$VERSION\"" android/app/build.gradle.kts
+          docker build -t pocketexit-android-builder android
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp -e GRADLE_USER_HOME=/tmp/gradle \
+            -e ANDROID_KEYSTORE_FILE=/signing/pocketexit-release.jks \
+            -e ANDROID_KEYSTORE_PASSWORD -e ANDROID_KEY_ALIAS -e ANDROID_KEY_PASSWORD \
+            -v "$PWD/android:/workspace" -v "$RUNNER_TEMP:/signing:ro" \
+            pocketexit-android-builder testDebugUnitTest lintRelease assembleRelease
+          cp android/app/build/outputs/apk/release/app-release.apk PocketExit-${GITHUB_REF_NAME}.apk
+          sha256sum PocketExit-${GITHUB_REF_NAME}.apk > SHA256SUMS
+      - name: Verify APK signature
+        run: |
+          docker run --rm --entrypoint apksigner \
+            -v "$PWD:/artifacts:ro" pocketexit-android-builder \
+            verify --verbose "/artifacts/PocketExit-${GITHUB_REF_NAME}.apk"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "PocketExit-${GITHUB_REF_NAME}.apk" SHA256SUMS --generate-notes --verify-tag
+
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Publish multi-architecture images with provenance and SBOMs
+        run: |
+          REPOSITORY=${GITHUB_REPOSITORY,,}
+          VERSION=${GITHUB_REF_NAME#v}
+          docker buildx create --use
+          for IMAGE in backend nginx; do
+            case "$IMAGE" in
+              backend) CONTEXT=backend; FILE=backend/Dockerfile ;;
+              nginx) CONTEXT=.; FILE=nginx/Dockerfile ;;
+            esac
+            docker buildx build --platform linux/amd64,linux/arm64 --push \
+              --provenance=true --sbom=true \
+              -f "$FILE" \
+              -t "ghcr.io/$REPOSITORY/$IMAGE:$VERSION" \
+              -t "ghcr.io/$REPOSITORY/$IMAGE:latest" \
+              "$CONTEXT"
+          done
+          docker buildx build --platform linux/amd64 --push \
+            --provenance=true --sbom=true \
+            -f android/Dockerfile \
+            -t "ghcr.io/$REPOSITORY/android-builder:$VERSION" \
+            -t "ghcr.io/$REPOSITORY/android-builder:latest" \
+            android

@@ -14,13 +14,17 @@ The following checks were executed in the delivery environment:
 - `go vet ./...`
 - `go test -race ./...`
 - full authenticated SOCKS5 TCP circuit test with a simulated Android agent;
+- two independent 8.4 MB full-duplex transfers over authenticated circuit
+  WebSockets, including circuit close and reconnect;
 - full SOCKS5 UDP ASSOCIATE round trip with a simulated Android agent;
 - backend process-level HTTP/control-plane smoke test;
 - JavaScript syntax validation with `node --check`;
 - Compose YAML parsing and topology assertions;
-- Android Gradle unit tests, lint, and debug APK compilation;
+- Android Gradle unit tests, lint, debug APK compilation, and unsigned release
+  compilation in the repository's Android builder image;
 - API 36 emulator installation, notification permission, UI launch, network
-  detection, foreground service startup, and public heartbeat registration;
+  detection, foreground service startup, public heartbeat registration, and
+  deep-link QR onboarding confirmation/import without displaying the token;
 - Docker image construction and live Compose health checks;
 - public SparkTunnel dashboard, health, authenticated heartbeat, and admin
   readback checks at `https://exit.photonspark.ro`;
@@ -58,6 +62,8 @@ Combined Go statement coverage across repeated final runs was **56.8%–58.9%**;
 - UDP frame fragmentation/coalescing/size handling;
 - destination ACL behavior, including mapped IPv6;
 - agent configuration validation.
+- onboarding URI validation, including rejection of unsafe or incomplete links;
+- route-policy state changes used to simulate roaming/network validation loss.
 
 ### CI-only integration
 
@@ -96,14 +102,14 @@ Short requests succeeded. The 100 MB probe received 1,982,208 bytes in 17.16
 seconds and the 1 GB probe received 474,878 bytes in 17.11 seconds before the
 SparkTunnel HTTP streams closed with TLS EOF. No test payload was retained.
 
-## Environment limitations
+## Historical physical-phone limitation
 
-SparkTunnel 0.3.0 successfully carries the dashboard, API, heartbeat, control,
-and short circuit requests, but its HTTP path still closes sustained PocketExit
-circuit body streams after roughly 16–17 seconds. Direct Nginx exposure remains
-required for TCP/UDP circuits until SparkTunnel supports these long-lived
-streams or the agent data protocol moves to a supported transport such as
-WebSockets.
+The physical-phone results above used PocketExit v0.3.0. Its paired streaming
+HTTP requests closed through SparkTunnel after roughly 16–17 seconds. v0.4.0
+replaces that data plane with one full-duplex WebSocket per circuit; the
+simulated-phone test completed two independent 8.4 MB transfers and reconnects
+through the new implementation. A fresh sustained physical-phone run remains
+necessary before assigning a carrier/OEM endurance result to v0.4.0.
 
 Wi-Fi-to-cellular control reconnection, sustained direct-ingress throughput,
 OEM background-process behavior, and carrier-specific NAT/IPv6 conditions have

@@ -26,7 +26,17 @@ python3 "$ROOT/scripts/verify-source.py"
 python3 - "$ROOT" <<'PY'
 import pathlib, sys, xml.etree.ElementTree as ET, yaml
 root = pathlib.Path(sys.argv[1])
-yaml.safe_load((root / "docker-compose.yml").read_text())
+class ComposeLoader(yaml.SafeLoader):
+    pass
+ComposeLoader.add_constructor(
+    "!override", lambda loader, node: loader.construct_sequence(node)
+)
+for path in [
+    root / "docker-compose.yml",
+    root / "docker-compose.tunnel.yml",
+    *sorted((root / ".github/workflows").glob("*.yml")),
+]:
+    yaml.load(path.read_text(), Loader=ComposeLoader)
 for path in (root / "android/app/src/main").rglob("*.xml"):
     ET.parse(path)
 print("YAML and Android XML parsing passed")

@@ -3,8 +3,16 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 TMP=$(mktemp -d)
-HTTP_PORT=${SMOKE_HTTP_PORT:-18080}
-SOCKS_PORT=${SMOKE_SOCKS_PORT:-11080}
+free_tcp_port() {
+  python3 - <<'PY'
+import socket
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+}
+HTTP_PORT=${SMOKE_HTTP_PORT:-$(free_tcp_port)}
+SOCKS_PORT=${SMOKE_SOCKS_PORT:-$(free_tcp_port)}
 PID=""
 cleanup() {
   [ -z "$PID" ] || kill "$PID" 2>/dev/null || true
@@ -30,6 +38,7 @@ ADMIN_TOKEN=smoke-admin-token-2026 \
 SOCKS_USERNAME=proxy \
 SOCKS_PASSWORD=smoke-proxy-password-2026 \
 AGENT_TOKENS_JSON='{"smoke-phone":"smoke-agent-token-2026"}' \
+AUDIT_LOG_PATH="$TMP/audit.jsonl" \
 LOG_JSON=false \
 "$TMP/pocketexit" >"$TMP/backend.log" 2>&1 &
 PID=$!
@@ -37,6 +46,10 @@ PID=$!
 BASE="http://127.0.0.1:$HTTP_PORT"
 i=0
 until curl -fsS "$BASE/api/v1/health" >/dev/null 2>&1; do
+  if ! kill -0 "$PID" 2>/dev/null; then
+    cat "$TMP/backend.log" >&2
+    exit 1
+  fi
   i=$((i+1))
   if [ "$i" -ge 50 ]; then
     cat "$TMP/backend.log" >&2
@@ -63,5 +76,6 @@ curl -fsS "$BASE/agent/v1/control?node_id=smoke-phone" \
   -H 'Authorization: Bearer smoke-agent-token-2026' | grep -q 'policy_update'
 
 curl -fsS "$BASE/api/v1/metrics" -H 'Authorization: Bearer smoke-admin-token-2026' | grep -q 'pocketexit_nodes_online 1'
+grep -q 'HTTP API listening' "$TMP/audit.jsonl"
 
 echo "Backend HTTP/control-plane smoke test passed"

@@ -12,6 +12,8 @@ services:
       - "1080/tcp"
       - "12000-12031/udp"
     read_only: true
+    volumes:
+      - pocketexit_data:/data
     tmpfs:
       - /tmp:size=32m,mode=1777
     security_opt:
@@ -34,6 +36,7 @@ services:
       - "443:443/tcp"
       - "443:443/udp"
       - "1080:1080/tcp"
+      - "1081:1081/tcp"
       - "12000-12031:12000-12031/udp"
     volumes:
       - ./nginx/certs/server.crt:/etc/nginx/certs/server.crt:ro
@@ -77,3 +80,6 @@ services:
 networks:
   internal:
     driver: bridge
+
+volumes:
+  pocketexit_data:

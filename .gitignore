@@ -1,4 +1,7 @@
 .env
+.secrets/
+*.jks
+*.keystore
 *.log
 *.zip
 *.sha256
