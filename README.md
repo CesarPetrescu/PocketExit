@@ -21,12 +21,42 @@ leaves through that SIM — no root, no `VpnService`, no ADB, no custom ROM.
 
 </div>
 
-```bash
-curl --proxy socks5h://proxy.example.com:1080 \
-     --proxy-user 'proxy@s20u!cellular:PASSWORD' \
-     https://api.ipify.org
-# → the public IPv4 of the SIM in the phone named s20u
-```
+## What it is
+
+PocketExit is a self-hosted SOCKS5 proxy whose exit nodes are Android phones.
+The server authenticates clients and schedules circuits; the selected phone
+opens each destination through Wi-Fi or its SIM and relays the bytes back. The
+phone needs no root, VPN profile, inbound port, or ADB connection.
+
+## Install and run
+
+1. Start the gateway (requires Docker Compose, OpenSSL, DNS, and the documented
+   [public ports](#quick-start)):
+
+   ```bash
+   git clone https://github.com/CesarPetrescu/PocketExit.git
+   cd PocketExit
+   DOMAIN=proxy.example.com make setup
+   $EDITOR .env
+   docker compose up --build -d
+   ```
+
+2. [Download the latest APK](https://github.com/CesarPetrescu/PocketExit/releases/latest),
+   install it on each phone, then enter the backend URL, a node ID from
+   `AGENT_TOKENS_JSON`, and that node's token from `.env`. Start the agent.
+
+3. Send traffic through the gateway using `SOCKS_USERNAME` and `SOCKS_PASSWORD`
+   from `.env`:
+
+   ```bash
+   curl --proxy socks5h://proxy.example.com:1080 \
+        --proxy-user 'proxy@s20u!cellular:PASSWORD' \
+        https://api.ipify.org
+   # → the public IPv4 of the SIM in the phone named s20u
+   ```
+
+See the full [Quick start](#quick-start) for trusted TLS, phone configuration,
+SparkTunnel, validation, and selector examples.
 
 > [!IMPORTANT]
 > The v0.3.0 APK is debug-signed. SparkTunnel 0.3.0 carries the dashboard, API,
