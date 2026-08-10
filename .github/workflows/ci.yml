@@ -11,12 +11,12 @@ jobs:
   backend-and-source:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: backend/go.mod
           cache: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
       - name: Core tests
@@ -25,7 +25,7 @@ jobs:
   android:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build Android toolchain image
         run: docker build -t pocketexit-android-builder android
       - name: Verify, lint, and build Android in container
@@ -34,7 +34,7 @@ jobs:
             -e HOME=/tmp -e GRADLE_USER_HOME=/tmp/gradle \
             -v "$PWD/android:/workspace" \
             pocketexit-android-builder testDebugUnitTest lintDebug assembleDebug
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: pocket-exit-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
@@ -43,7 +43,7 @@ jobs:
   compose:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Generate configuration
         run: ./scripts/setup.sh localhost
       - name: Validate and build
