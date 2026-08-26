@@ -3,6 +3,7 @@ name: Health Week v0.3 temporary build
 on:
   push:
     branches:
+      - main
       - healthweek-v03-builder
     paths:
       - '.github/workflows/healthweek-v03-temp-build.yml'
