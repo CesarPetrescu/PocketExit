@@ -1,0 +1,150 @@
+name: Health Week v0.3 temporary build
+
+on:
+  push:
+    branches:
+      - healthweek-v03-builder
+    paths:
+      - '.github/workflows/healthweek-v03-temp-build.yml'
+      - 'ci/healthweek-v03/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout runner repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
+
+      - name: Reconstruct Health Week v0.3 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          PARTS="$RUNNER_TEMP/healthweek-source-parts"
+          PROJECT="$RUNNER_TEMP/healthweek"
+          mkdir -p "$PARTS" "$PROJECT"
+
+          for part in \
+            source.xz.b64.000 \
+            source.xz.b64.001 \
+            source.xz.b64.002 \
+            source.xz.b64.003 \
+            source.xz.b64.004 \
+            source.xz.b64.005 \
+            source.xz.b64.006 \
+            source.xz.b64.007a \
+            source.xz.b64.007b \
+            source.xz.b64.008
+          do
+            curl --fail --location --retry 5 --retry-all-errors \
+              "https://raw.githubusercontent.com/CesarPetrescu/emptyrepo/main/ci/healthweek-v03/$part" \
+              --output "$PARTS/$part"
+          done
+
+          cat "$PARTS"/source.xz.b64.* \
+            | tr -d '\r\n\t ' \
+            | base64 --decode \
+            > "$RUNNER_TEMP/healthweek-source.tar.xz"
+
+          printf '%s  %s\n' \
+            '6c90d5ecdbead3ba95936f7a399618e572d331e5dbcb0a9c5e7c5ba47fb863f2' \
+            "$RUNNER_TEMP/healthweek-source.tar.xz" \
+            | sha256sum --check --strict -
+
+          tar -tJf "$RUNNER_TEMP/healthweek-source.tar.xz" >/dev/null
+          tar -xJf "$RUNNER_TEMP/healthweek-source.tar.xz" -C "$PROJECT"
+          chmod +x "$PROJECT/gradlew"
+
+      - name: Restore pinned Samsung Health Data SDK AAR
+        working-directory: ${{ runner.temp }}/healthweek
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/libs
+          curl --fail --location --retry 5 --retry-all-errors \
+            --output app/libs/samsung-health-data-api-1.1.0.aar \
+            https://raw.githubusercontent.com/S108-Sleeper/Sleeper_APP/b15fa77b9f296bb1c9e50ee54f786d11b67fdd0b/App/core/samsung-health/libs/samsung-health-data-api-1.1.0.aar
+          printf '%s  %s\n' \
+            'f5d3d83cf00b97d0bb1b1db4da076e861eb1c3e6e704d89a34e68909d2f38654' \
+            'app/libs/samsung-health-data-api-1.1.0.aar' \
+            | sha256sum --check --strict -
+
+      - name: Compile, unit test, lint, and assemble release
+        working-directory: ${{ runner.temp }}/healthweek
+        shell: bash
+        run: |
+          ./gradlew \
+            :app:testDebugUnitTest \
+            :app:lintRelease \
+            :app:assembleRelease \
+            --stacktrace \
+            --no-daemon
+
+      - name: Verify unsigned APK and prepare package
+        working-directory: ${{ runner.temp }}/healthweek
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | head -1)"
+          test -n "$APK"
+
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+          mkdir -p artifact
+
+          "$BUILD_TOOLS/zipalign" -p -f 4 \
+            "$APK" \
+            artifact/HealthWeek-v0.3.0-unsigned.apk
+          "$BUILD_TOOLS/zipalign" -c -v 4 \
+            artifact/HealthWeek-v0.3.0-unsigned.apk \
+            | tee artifact/zipalign-unsigned.txt
+          "$BUILD_TOOLS/aapt" dump badging \
+            artifact/HealthWeek-v0.3.0-unsigned.apk \
+            | tee artifact/aapt-badging.txt
+          unzip -t artifact/HealthWeek-v0.3.0-unsigned.apk \
+            | tee artifact/zip-integrity-unsigned.txt
+          sha256sum artifact/HealthWeek-v0.3.0-unsigned.apk \
+            | tee artifact/HealthWeek-v0.3.0-unsigned.apk.sha256
+
+          cp "$BUILD_TOOLS/zipalign" artifact/zipalign
+          cp "$BUILD_TOOLS/lib/apksigner.jar" artifact/apksigner.jar
+          cp "$BUILD_TOOLS/aapt" artifact/aapt
+          cp app/build/reports/lint-results-release.html artifact/ || true
+          cp app/build/reports/lint-results-release.xml artifact/ || true
+          cp -r app/build/reports/tests/testDebugUnitTest artifact/unit-tests || true
+
+          (
+            cd "$RUNNER_TEMP/healthweek"
+            zip -qr artifact/HealthWeek-v0.3.0-source.zip . \
+              -x 'app/libs/*.aar' \
+              -x 'app/build/*' \
+              -x '.gradle/*' \
+              -x 'artifact/*'
+          )
+
+      - name: Upload Health Week build package
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthWeek-v0.3.0-unsigned-build
+          path: ${{ runner.temp }}/healthweek/artifact/*
+          if-no-files-found: error
+          retention-days: 1
