@@ -405,9 +405,11 @@ func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	disabled := false
-	if _, err := s.nodes.Update(nodeID, &disabled, nil, nil); err != nil && !errors.Is(err, nodes.ErrNodeNotFound) {
-		s.logger.Warn("could not disable unpaired node", "node_id", nodeID, "error", err)
+	// Remove rather than disable: a disabled record survives for the life of
+	// the process, so re-pairing the same node id would succeed and then never
+	// carry a circuit.
+	if err := s.nodes.Remove(nodeID); err != nil && !errors.Is(err, nodes.ErrNodeNotFound) {
+		s.logger.Warn("could not remove unpaired node", "node_id", nodeID, "error", err)
 	}
 	for _, view := range s.circuits.List() {
 		if view.NodeID == nodeID {

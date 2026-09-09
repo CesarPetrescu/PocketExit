@@ -164,10 +164,12 @@ func TestEnsureCertificateRegenerationTriggers(t *testing.T) {
 		{name: "expired", issuedAgo: certValidity + 24*time.Hour, hostIPs: hostIPs, wantIssued: true},
 		{name: "inside the renewal window", issuedAgo: certValidity - certRenewBefore + time.Hour, hostIPs: hostIPs, wantIssued: true},
 		{name: "just outside the renewal window", issuedAgo: certValidity - certRenewBefore - 24*time.Hour, hostIPs: hostIPs},
+		// A moved laptop re-issues the certificate over the same key, so the
+		// SAN set follows the machine while the pin -- and every phone paired
+		// against it -- survives. Issued stays false: it means the key rotated.
 		{
-			name:       "new host address",
-			hostIPs:    append([]net.IP{net.ParseIP("10.0.0.7")}, hostIPs...),
-			wantIssued: true,
+			name:    "new host address",
+			hostIPs: append([]net.IP{net.ParseIP("10.0.0.7")}, hostIPs...),
 		},
 		{name: "host address removed", hostIPs: nil},
 	}
@@ -365,4 +367,51 @@ func copyFile(t *testing.T, source, destination string) {
 		t.Fatal(err)
 	}
 	writeFile(t, destination, string(payload))
+}
+
+// A laptop that joins a different network gets a different address, which the
+// certificate has to start covering. Doing that by rotating the key would
+// change the pin and lock out every phone already paired against it, with
+// re-pairing the only way back -- the precise failure that pinning the
+// SubjectPublicKeyInfo instead of the whole certificate exists to avoid.
+func TestMovingNetworksKeepsThePinAndTheAlreadyPairedPhones(t *testing.T) {
+	directory := t.TempDir()
+	now := time.Now()
+	home := []net.IP{net.ParseIP("192.168.1.50").To4()}
+	cafe := []net.IP{net.ParseIP("10.24.9.3").To4()}
+
+	atHome, err := ensureCertificate(directory, home, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !atHome.Issued {
+		t.Fatal("the first certificate should report that it issued a key")
+	}
+
+	atCafe, err := ensureCertificate(directory, cafe, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if atCafe.Pin != atHome.Pin {
+		t.Fatalf("the pin changed on a network move: %q became %q", atHome.Pin, atCafe.Pin)
+	}
+	if atCafe.Issued {
+		t.Fatal("Issued must stay false when the key was reused")
+	}
+	if !coversIPs(atCafe.Leaf, cafe) {
+		t.Fatalf("the re-issued certificate does not cover %v: %v", cafe, atCafe.Leaf.IPAddresses)
+	}
+	if atCafe.Leaf.SerialNumber.Cmp(atHome.Leaf.SerialNumber) == 0 {
+		t.Fatal("the certificate was not actually re-issued")
+	}
+
+	// Expiry is the one condition that legitimately rotates the key, and the
+	// pin has to move with it.
+	expired, err := ensureCertificate(directory, cafe, now.Add(certValidity+time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !expired.Issued || expired.Pin == atHome.Pin {
+		t.Fatal("an expired certificate must rotate the key and the pin")
+	}
 }

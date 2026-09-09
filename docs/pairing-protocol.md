@@ -61,10 +61,20 @@ LAN certificate without the user installing anything.
 }
 ```
 
-The certificate is regenerated when it is missing, expired, within 30 days of
-expiry, or no longer covers the host's current set of IP addresses. The key is
-regenerated with it, which changes the pin, which is why the dashboard always
-renders the *current* pin rather than caching one.
+The certificate is re-issued when it is missing, unparsable, expired, within 30
+days of expiry, or no longer covers the host's current set of IP addresses.
+
+The **key** rotates only when there is no usable one to keep: missing,
+unparsable, not matching the certificate, or genuinely near expiry. A laptop
+that simply moved to another network keeps its key and is re-issued a
+certificate covering the new address, so the pin survives and phones paired
+against it keep connecting. Rotating the key there would lock out every paired
+phone with re-pairing the only way back, which is the exact failure that
+pinning the SubjectPublicKeyInfo instead of the whole certificate exists to
+prevent.
+
+Because the key can rotate on expiry, the dashboard always renders the
+*current* pin rather than caching one.
 
 ## Certificate
 

@@ -97,11 +97,33 @@ func ensureCertificate(directory string, hostIPs []net.IP, now time.Time) (Certi
 	if err == nil && !expiringSoon(existing.Leaf, now) && coversIPs(existing.Leaf, hostIPs) {
 		return existing, nil
 	}
-	// Missing, unparsable, expiring or no longer covering the host's addresses:
-	// the contract regenerates the key alongside the certificate.
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return Certificate{}, fmt.Errorf("generate P-256 key: %w", err)
+
+	// A laptop that moves between networks gets a new address, which no longer
+	// matches the certificate's SANs. Rotating the key for that would change
+	// the pin, and every phone paired against the old key would refuse the
+	// connection with no way back but re-pairing -- which is exactly what
+	// pinning the SubjectPublicKeyInfo rather than the whole certificate is
+	// supposed to avoid. So when the existing key is still usable and only the
+	// address set moved, the certificate is re-issued over the same key and
+	// the pin survives.
+	if err == nil && !expiringSoon(existing.Leaf, now) {
+		if key, ok := existing.TLS.PrivateKey.(*ecdsa.PrivateKey); ok {
+			reissued, reissueErr := issueCertificate(directory, hostIPs, key, now)
+			if reissueErr != nil {
+				return Certificate{}, reissueErr
+			}
+			// A new certificate file, but the same key: the pin is unchanged,
+			// so no paired phone has to do anything.
+			reissued.Issued = false
+			return reissued, nil
+		}
+	}
+
+	// Missing, unparsable, mismatched or genuinely near expiry: only here does
+	// the key rotate, and the pin with it.
+	key, keyErr := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if keyErr != nil {
+		return Certificate{}, fmt.Errorf("generate P-256 key: %w", keyErr)
 	}
 	return issueCertificate(directory, hostIPs, key, now)
 }
