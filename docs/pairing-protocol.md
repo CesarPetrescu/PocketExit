@@ -105,8 +105,22 @@ escaping).
 - 8 characters drawn from the Crockford base32 alphabet
   `0123456789ABCDEFGHJKMNPQRSTVWXYZ` (no `I`, `L`, `O`, `U`), uniformly at
   random via `crypto/rand` with rejection sampling. 40 bits of entropy.
-- Rendered in groups of four (`A1B2-C3D4`) for reading aloud; separators and
-  case are ignored on submission.
+- Rendered in groups of four (`A1B2-C3D4`) for reading aloud.
+- Normalised before comparison, always on the server as the code is claimed, so
+  a client may submit exactly what the user typed. A client that pre-validates
+  or reformats a typed code has to fold it the same way or it will reject input
+  the server would have accepted. The fold, in order:
+
+  1. upper-case the whole string;
+  2. drop `-` and any Unicode whitespace;
+  3. map `I` and `L` to `1`;
+  4. map `O` to `0`.
+
+  Nothing else is rewritten, so any other character survives the fold and simply
+  fails to match. The alphabet omits `I`, `L`, `O` and `U`, so no generated code
+  can contain a character this fold rewrites, and folding can never turn one
+  valid code into another. `U` has no confusable and is not folded, so a code
+  typed with a `U` in it never matches.
 - Time to live: 10 minutes.
 - Single use. A successful claim consumes it.
 - Five failed attempts consume it. Compared in constant time.

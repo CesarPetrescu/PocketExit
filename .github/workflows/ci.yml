@@ -49,7 +49,6 @@ jobs:
               - '.github/workflows/ci.yml'
             android:
               - 'android/**'
-              - 'scripts/verify-source.py'
               - '.github/workflows/ci.yml'
             deployment:
               - 'backend/**'
@@ -247,12 +246,21 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
+      # check-compose.py and parse-documents.py import yaml. The runner image
+      # carries PyYAML today only as a transitive dependency of something else,
+      # so it is pinned here in a virtualenv the same way yamllint and zizmor
+      # are below.
+      - name: PyYAML
+        run: |
+          python3 -m venv "$RUNNER_TEMP/pyyaml"
+          "$RUNNER_TEMP/pyyaml/bin/pip" install --quiet PyYAML==6.0.3
       - name: Repository policy checks
         run: |
-          python3 scripts/check-compose.py
+          "$RUNNER_TEMP/pyyaml/bin/python" scripts/check-compose.py
           python3 scripts/verify-source.py
       - name: Parse every YAML and Android XML document
-        run: python3 .github/e2e/parse-documents.py
+        run: |
+          "$RUNNER_TEMP/pyyaml/bin/python" .github/e2e/parse-documents.py
       - name: Frontend syntax
         run: node --check frontend/app.js
       - name: Frontend lint

@@ -105,6 +105,104 @@ func TestOpenRefusesLooseDirectoryPermissions(t *testing.T) {
 	}
 }
 
+// The directory mode is enforced on the way in, but a state file or private
+// key restored from a backup or copied off another machine carries its own
+// mode with it.
+func TestOpenRefusesLooseSecretFilePermissions(t *testing.T) {
+	tests := []struct {
+		name    string
+		file    string
+		mode    os.FileMode
+		wantErr bool
+	}{
+		{name: "state owner only", file: stateFileName, mode: 0o600, wantErr: false},
+		{name: "state group readable", file: stateFileName, mode: 0o640, wantErr: true},
+		{name: "state other readable", file: stateFileName, mode: 0o604, wantErr: true},
+		{name: "key owner only", file: keyFileName, mode: 0o600, wantErr: false},
+		{name: "key group readable", file: keyFileName, mode: 0o640, wantErr: true},
+		{name: "key world writable", file: keyFileName, mode: 0o666, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// A store opened once leaves both a valid state.json and the
+			// directory behind, so only the mode under test differs.
+			store := newTestStore(t)
+			directory := store.Directory()
+			path := filepath.Join(directory, test.file)
+			if test.file == keyFileName {
+				if err := os.WriteFile(path, []byte("-----BEGIN PRIVATE KEY-----\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Chmod(path, test.mode); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Open(directory)
+			if !test.wantErr {
+				if err != nil {
+					t.Fatalf("expected mode %#o on %s to be accepted: %v", test.mode, test.file, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected mode %#o on %s to be refused", test.mode, test.file)
+			}
+			if !strings.Contains(err.Error(), path) {
+				t.Fatalf("error does not name the file: %v", err)
+			}
+			if !strings.Contains(err.Error(), fmt.Sprintf("%#o", test.mode.Perm())) {
+				t.Fatalf("error does not name the mode: %v", err)
+			}
+		})
+	}
+}
+
+// A first run has neither file yet, which is not a permission problem.
+func TestOpenAcceptsMissingSecretFiles(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "pocketexit")
+	store, err := Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(store.Directory(), keyFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected no private key on a first run, got %v", err)
+	}
+}
+
+// The rename in writeFileAtomic is only durable once the directory entry is
+// flushed, so the sync has to succeed on an ordinary state directory rather
+// than being swallowed everywhere.
+func TestWriteFileAtomicSyncsTheDirectory(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "secret")
+	if err := writeFileAtomic(path, []byte("payload\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncDirectory(directory); err != nil {
+		t.Fatalf("syncing an ordinary directory failed: %v", err)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(payload) != "payload\n" {
+		t.Fatalf("unexpected contents %q", payload)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "secret" {
+		t.Fatalf("temporary files were left behind: %+v", entries)
+	}
+}
+
+func TestSyncDirectoryReportsAMissingDirectory(t *testing.T) {
+	if err := syncDirectory(filepath.Join(t.TempDir(), "absent")); err == nil {
+		t.Fatal("expected an error for a directory that does not exist")
+	}
+}
+
 func TestStateRoundTripsThroughDisk(t *testing.T) {
 	store := newTestStore(t)
 	first, err := store.AddNode("pixel-8-a1b2c3d4", "Pixel 8")

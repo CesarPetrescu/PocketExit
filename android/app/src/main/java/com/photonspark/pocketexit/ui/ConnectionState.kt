@@ -28,14 +28,28 @@ internal enum class ConnectionState {
  */
 private const val HEARTBEAT_STALE_MS = 45_000L
 
-internal fun connectionState(runtime: AgentRuntime, nowMs: Long): ConnectionState = when {
+internal fun connectionState(
+    runtime: AgentRuntime,
+    nowMs: Long,
+    controlAcceptsUnvalidatedWifi: Boolean = false,
+): ConnectionState = when {
     !runtime.running -> ConnectionState.STOPPED
-    !runtime.wifi.usable && !runtime.cellular.usable -> ConnectionState.NO_NETWORK
+    !hasUsableNetwork(runtime, controlAcceptsUnvalidatedWifi) -> ConnectionState.NO_NETWORK
     runtime.lastHeartbeatEpochMs == 0L -> ConnectionState.CONNECTING
     nowMs - runtime.lastHeartbeatEpochMs > HEARTBEAT_STALE_MS -> ConnectionState.DEGRADED
     !runtime.registered -> ConnectionState.DEGRADED
     else -> ConnectionState.ONLINE
 }
+
+/**
+ * A personal-mode server on the local network is reached over a Wi-Fi the
+ * system never validates, so with that relaxation in force an available Wi-Fi
+ * is a network the phone can work over. Without it the old rule stands.
+ */
+private fun hasUsableNetwork(runtime: AgentRuntime, controlAcceptsUnvalidatedWifi: Boolean): Boolean =
+    runtime.wifi.usable ||
+        runtime.cellular.usable ||
+        (controlAcceptsUnvalidatedWifi && runtime.wifi.available)
 
 /**
  * Which network the exit traffic would leave through right now. The service

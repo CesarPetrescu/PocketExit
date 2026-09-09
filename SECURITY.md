@@ -1,8 +1,15 @@
 # Security
 
-PocketExit is a private proxy system. Exposing it without authentication, destination controls, and transport security would create an abuse path attached to your mobile subscriptions. Complete this checklist before Internet deployment.
+PocketExit is a private proxy system. Exposing it without authentication, destination controls, and transport security would create an abuse path attached to your mobile subscriptions.
 
-## Deployment checklist
+It runs in two modes whose security properties differ, and their instructions are not interchangeable:
+
+- **Server mode** — a deployed backend behind nginx, agent tokens read once at boot from `AGENT_TOKENS_JSON`. Complete the [deployment checklist](#deployment-checklist--server-mode) before Internet deployment.
+- **Personal mode** — `pocketexit personal` on your own machine, a self-signed certificate authenticated by a pin the phone reads off your screen, tokens minted at pairing time. See [Personal mode](#personal-mode). `docs/pairing-protocol.md` is the binding protocol contract; this file is the operational summary.
+
+## Deployment checklist — server mode
+
+Every item below is about a server-mode deployment. Personal mode has no `.env`, no nginx, and no static token map, and several of these items invert there — do not apply this list to it.
 
 - Replace every placeholder in `.env` with cryptographically random values.
 - Use a distinct agent token for every phone.
@@ -15,6 +22,102 @@ PocketExit is a private proxy system. Exposing it without authentication, destin
 - Revoke a lost phone by removing its node token and restarting the backend.
 - Rotate `ADMIN_TOKEN` and `SOCKS_PASSWORD` after suspected disclosure.
 
+## Personal mode
+
+Personal mode replaces that deployment with a single process on your own
+machine. Three items in the checklist above invert here: the certificate is
+deliberately self-signed rather than system-trusted, a lost phone is revoked
+while the process keeps running instead of by editing a file and restarting,
+and there is no `ADMIN_TOKEN` or `SOCKS_PASSWORD` in the environment to rotate
+— both are generated on first run and live in `state.json`.
+
+### The state directory is the whole secret
+
+`$POCKETEXIT_HOME`, `~/.pocketexit` by default, is created with mode `0700` and
+holds everything an attacker would need:
+
+| File | Mode | Contents |
+|---|---|---|
+| `tls.key` | `0600` | The private key phones pin. Reused across a network move so paired phones keep connecting |
+| `tls.crt` | `0644` | The self-signed leaf certificate |
+| `state.json` | `0600` | Admin token, SOCKS password, and every paired phone's agent token |
+| `audit.jsonl` | `0600` | The structured JSONL audit log, written here rather than at `AUDIT_LOG_PATH` |
+
+The process refuses to start when that directory is readable by group or other,
+and names the `chmod 700` that fixes it. Anyone who can read the directory can
+impersonate your machine to every paired phone, drive the admin API, and use the
+proxy. Back it up like a password file, or not at all. To rotate everything,
+delete `state.json`: the next run generates a fresh admin token and SOCKS
+password, and every phone has to pair again.
+
+### Trust is a pin carried on your screen
+
+The phone authenticates the server by SHA-256 over the certificate's
+SubjectPublicKeyInfo — base64url, unpadded — carried out of band in the QR code
+you scan. The chain is not walked, the platform trust store is not consulted,
+and hostname verification is off, because the pin already binds the connection
+to one specific key. Pinning the key rather than the whole certificate is what
+lets the certificate be re-issued for a new address without breaking paired
+phones; it also makes `tls.key` the single file whose disclosure lets a LAN
+attacker impersonate the server to every phone paired with it.
+
+Consistent with the threat model in `docs/pairing-protocol.md`, this defends
+against:
+
+- a passive LAN eavesdropper — the connection is TLS;
+- an active LAN attacker impersonating the machine — without the pinned private
+  key the handshake fails;
+- a malicious `pocketexit://` link — pairing needs a live code, and the app
+  shows the origin, the server name and the pin and stores nothing and contacts
+  nobody until you confirm;
+- brute force of the pairing code, covered below.
+
+It does not defend against:
+
+- **anyone who can see the screen** while a code is displayed: they can pair a
+  phone. The 10-minute window and the single use are the whole defence;
+- **a compromised machine**, which holds the private key, the admin token, the
+  SOCKS password, and every paired phone's agent token. There is no second
+  factor;
+- **the carrier**, which sees the destinations of exit traffic as it always
+  does.
+
+### The pairing-code window
+
+- Eight characters of Crockford base32 from `crypto/rand` with rejection
+  sampling: 40 bits of entropy, compared in constant time.
+- Valid for 10 minutes, single use, and consumed by five failed attempts.
+- At most one code is active; minting a new one replaces the old. Codes are held
+  in memory only, so restarting the process invalidates any outstanding one.
+- `POST /pair/v1/claim` is the only unauthenticated write endpoint in the
+  system. It is rate limited to 10 attempts per source address per 10 minutes,
+  answering `429` beyond that.
+- The HTTPS listener defaults to `0.0.0.0:8443`, so everything on your network
+  can reach that endpoint while a code is live. Cancel a code you no longer need
+  with the dashboard's cancel action (`DELETE /api/v1/pairing`) rather than
+  waiting out the window.
+
+### Revoking a phone
+
+`DELETE /api/v1/nodes/{nodeID}`, with the admin token, revokes that phone's
+agent token, removes it from the registry, closes its circuits, and rewrites
+`state.json`. No restart, and the phone cannot register again without a new
+pairing code. The dashboard's **Unpair** action on a node calls it.
+
+In server mode the same endpoint answers `409`: `AGENT_TOKENS_JSON` is read once
+at boot, so revocation there really does mean editing the file and restarting,
+as the checklist says.
+
+### Two more personal-mode defaults worth knowing
+
+- SOCKS binds to `127.0.0.1:1080` because the machine running the binary is the
+  only client. `--socks-addr` can move it, and the process logs a warning when
+  the result is not a loopback address: publishing it puts an authenticated open
+  proxy on your local network.
+- The dashboard is served by the process itself over that self-signed
+  certificate, so the browser warns. That warning is expected — the pin, not the
+  browser's chain check, is what protects the phone.
+
 ## Implemented controls
 
 ### Authentication
@@ -24,7 +127,7 @@ PocketExit is a private proxy system. Exposing it without authentication, destin
 - SOCKS5: mandatory username/password authentication.
 - UDP relay: allocated only after authenticated TCP UDP ASSOCIATE and locked to the first observed upstream session.
 
-### Network isolation
+### Network isolation (server mode)
 
 Only Nginx publishes host ports. The backend uses an internal Compose network, a read-only root filesystem, no Linux capabilities, and `no-new-privileges`.
 
@@ -68,7 +171,9 @@ The agent token is encrypted using an AES-GCM key generated in Android Keystore.
 
 The dashboard stores the admin token in `sessionStorage`, not `localStorage`. It is still available to JavaScript in that origin, so the gateway must not host third-party scripts. The bundled dashboard has no external dependencies and Nginx sends a restrictive Content Security Policy.
 
-## Development certificate warning
+## Development certificate warning — server mode
+
+Personal mode never runs this script and never creates a CA: it issues its own self-signed leaf certificate and the phone authenticates it by pin.
 
 `scripts/gen-dev-certs.sh` creates a local CA and server key. The CA private key is highly sensitive because it can issue certificates trusted by any device on which that CA is installed.
 

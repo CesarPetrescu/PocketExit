@@ -11,8 +11,29 @@ data class NetworkAvailability(
 )
 
 object PolicySelector {
-    fun select(policy: Policy, state: NetworkAvailability): NetworkKind {
-        val wifiUsable = state.wifiAvailable && state.wifiValidated
+    /**
+     * What the chosen network has to reach. [CONTROL] only has to reach the
+     * server; [EXIT] carries somebody's traffic out to the Internet.
+     */
+    enum class Scope { CONTROL, EXIT }
+
+    /**
+     * [acceptUnvalidatedWifi] relaxes the validation requirement for the
+     * control channel only, and only for a personal-mode server that lives at a
+     * private address. Such a server is one hop away over a Wi-Fi that Android
+     * will never mark validated — a phone hotspot, a LAN-only router, a captive
+     * network — so requiring validation there means never reaching it at all.
+     * Exit traffic genuinely needs a validated path to the Internet and is left
+     * strictly as it was.
+     */
+    fun select(
+        policy: Policy,
+        state: NetworkAvailability,
+        scope: Scope = Scope.EXIT,
+        acceptUnvalidatedWifi: Boolean = false,
+    ): NetworkKind {
+        val wifiUsable = state.wifiAvailable &&
+            (state.wifiValidated || (scope == Scope.CONTROL && acceptUnvalidatedWifi))
         val cellularUsable = state.cellularAvailable && state.cellularValidated
 
         return when (policy) {

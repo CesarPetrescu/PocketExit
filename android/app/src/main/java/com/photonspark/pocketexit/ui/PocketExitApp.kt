@@ -19,8 +19,10 @@ import com.photonspark.pocketexit.data.AppPreferences
 import com.photonspark.pocketexit.data.OnboardingLink
 import com.photonspark.pocketexit.data.RuntimeStore
 import com.photonspark.pocketexit.data.parseOnboardingUri
+import com.photonspark.pocketexit.network.NetworkMonitor
 import com.photonspark.pocketexit.network.PairingClient
 import com.photonspark.pocketexit.service.ExitNodeService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
 private enum class Screen { WELCOME, HOME, SETTINGS }
@@ -38,6 +40,9 @@ internal fun PocketExitApp(
     onOnboardingConsumed: () -> Unit,
 ) {
     val context = LocalContext.current
+    // The claim outlives this composition, so it is handed the application
+    // context rather than the activity it was started from.
+    val appContext = remember(context) { context.applicationContext }
     val savedConfig by preferences.state.collectAsState()
     val runtime by RuntimeStore.state.collectAsState()
 
@@ -46,11 +51,22 @@ internal fun PocketExitApp(
     var requestedScreen by rememberSaveable { mutableStateOf("") }
     var pairedNotice by rememberSaveable { mutableStateOf(false) }
 
+    // The proxy hint the claim answered with. Display only: it carries no
+    // password, and nothing on this phone connects to it.
+    var socksHost by rememberSaveable { mutableStateOf("") }
+    var socksPort by rememberSaveable { mutableStateOf(0) }
+    var socksUsername by rememberSaveable { mutableStateOf("") }
+
     // The link is kept as the raw URI rather than a parsed object so the
     // confirmation survives a rotation; nothing about it is written anywhere.
     var pendingUri by rememberSaveable { mutableStateOf("") }
     var claiming by rememberSaveable { mutableStateOf(false) }
-    var failure by rememberSaveable { mutableStateOf("") }
+    // Every confirmation is its own attempt, so retrying after a failure starts
+    // a fresh claim instead of re-reading the one that already failed.
+    var attempt by rememberSaveable { mutableStateOf(0) }
+    // Not saved: the claim itself is the record of what happened, and a
+    // recreated composition is told again by awaiting it.
+    var failure by remember { mutableStateOf<PairingClient.Result.Failed?>(null) }
 
     val configured = savedConfig.validationError() == null
     val paired = savedConfig.agentToken.isNotBlank()
@@ -79,15 +95,22 @@ internal fun PocketExitApp(
     val settingsSavedRestart = stringResource(R.string.settings_saved_restart)
     val settingsUnpaired = stringResource(R.string.settings_unpaired)
     val link = parsed?.getOrNull()
+    val currentFailure = failure
     val flow: PairingFlow = when {
         parsed == null -> PairingFlow.Idle
         // parsed is non-null here: the branch above returned when it was not.
         link == null -> PairingFlow.Rejected(parsed.exceptionOrNull()?.message ?: unreadable)
         link is OnboardingLink.Configured -> PairingFlow.Import(link.config)
         link is OnboardingLink.Pairing && claiming -> PairingFlow.Working(link)
-        link is OnboardingLink.Pairing && failure.isNotEmpty() -> PairingFlow.Failed(link, failure)
+        link is OnboardingLink.Pairing && currentFailure != null ->
+            PairingFlow.Failed(link, currentFailure)
         link is OnboardingLink.Pairing -> PairingFlow.Confirm(link)
         else -> PairingFlow.Idle
+    }
+    val socks = if (socksHost.isNotEmpty() && socksPort > 0 && socksUsername.isNotEmpty()) {
+        SocksHint(socksHost, socksPort, socksUsername)
+    } else {
+        null
     }
 
     LaunchedEffect(savedConfig) { form = savedConfig }
@@ -95,7 +118,7 @@ internal fun PocketExitApp(
         if (onboardingUri != null) {
             pendingUri = onboardingUri
             claiming = false
-            failure = ""
+            failure = null
             onOnboardingConsumed()
         }
     }
@@ -105,17 +128,36 @@ internal fun PocketExitApp(
             message = ""
         }
     }
-    // Claiming lives in an effect rather than a one-shot scope so a rotation
-    // mid-request restarts it instead of leaving the sheet spinning forever.
-    LaunchedEffect(pendingUri, claiming) {
+    // The claim is owned by PairingClaims rather than by this effect, so an
+    // activity recreation mid-request re-attaches to the running job instead of
+    // spending the single-use code a second time.
+    LaunchedEffect(pendingUri, claiming, attempt) {
         if (!claiming) return@LaunchedEffect
         val pairing = link as? OnboardingLink.Pairing
         if (pairing == null) {
             claiming = false
             return@LaunchedEffect
         }
-        val result = PairingClient(pairing.serverUrl, pairing.pin)
-            .claim(pairing.pairingCode, Build.MODEL)
+        val key = "${pairing.serverUrl}|${pairing.pairingCode}|$attempt"
+        val onLan = AgentConfig.hasPrivateHost(pairing.serverUrl)
+        val pendingClaim = PairingClaims.claim(key) {
+            // A laptop on the LAN answers over Wi-Fi, not over whatever the
+            // phone calls its default route, and it answers there whether or
+            // not that Wi-Fi has an Internet path behind it.
+            val network = NetworkMonitor.awaitWifi(appContext, requireValidated = !onLan)
+            PairingClient(pairing.serverUrl, pairing.pin, network)
+                .claim(pairing.pairingCode, Build.MODEL)
+        }
+        val result = try {
+            pendingClaim.await()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            PairingClient.Result.Failed(
+                PairingClient.Failure.UNREACHABLE,
+                error.message.orEmpty(),
+            )
+        }
         when (result) {
             is PairingClient.Result.Paired -> {
                 if (runtime.running) ExitNodeService.stop(context)
@@ -130,27 +172,22 @@ internal fun PocketExitApp(
                         pin = pairing.pin,
                         enabled = false,
                     ),
+                    // The server assigned this id; it is stored exactly as it
+                    // arrived so the phone keeps matching the registry.
+                    sanitizeNodeId = false,
                 )
+                socksHost = result.socksHost
+                socksPort = result.socksPort
+                socksUsername = result.socksUsername
                 claiming = false
-                failure = ""
+                failure = null
                 pendingUri = ""
                 pairedNotice = true
                 requestedScreen = ""
+                PairingClaims.forget(key)
             }
-            is PairingClient.Result.CodeRejected -> {
-                failure = result.message
-                claiming = false
-            }
-            is PairingClient.Result.RateLimited -> {
-                failure = result.message
-                claiming = false
-            }
-            is PairingClient.Result.RequestRejected -> {
-                failure = result.message
-                claiming = false
-            }
-            is PairingClient.Result.Unreachable -> {
-                failure = result.message
+            is PairingClient.Result.Failed -> {
+                failure = result
                 claiming = false
             }
         }
@@ -167,6 +204,7 @@ internal fun PocketExitApp(
             runtime = runtime,
             message = message,
             pairedNotice = pairedNotice,
+            socks = socks,
             onToggle = {
                 if (runtime.running) {
                     val disabled = savedConfig.copy(enabled = false)
@@ -233,6 +271,9 @@ internal fun PocketExitApp(
                 preferences.save(cleared)
                 form = cleared
                 pairedNotice = false
+                socksHost = ""
+                socksPort = 0
+                socksUsername = ""
                 requestedScreen = ""
                 message = settingsUnpaired
             },
@@ -244,22 +285,37 @@ internal fun PocketExitApp(
         flow = flow,
         deviceName = Build.MODEL,
         onConfirmPairing = {
-            failure = ""
+            failure = null
+            attempt += 1
             claiming = true
         },
         onConfirmImport = { candidate: AgentConfig ->
             if (runtime.running) ExitNodeService.stop(context)
-            preferences.save(candidate)
-            form = candidate
+            // The link's own fields are applied to the configuration as it
+            // stands now. The parse ran against whatever was stored when the
+            // sheet opened, so writing that copy back would undo anything the
+            // server changed while the person was reading it.
+            val imported = savedConfig.copy(
+                serverUrl = candidate.serverUrl,
+                nodeId = candidate.nodeId,
+                agentToken = candidate.agentToken,
+                pin = candidate.pin,
+                enabled = candidate.enabled,
+            )
+            preferences.save(imported)
+            form = imported
+            socksHost = ""
+            socksPort = 0
+            socksUsername = ""
             pendingUri = ""
-            failure = ""
+            failure = null
             pairedNotice = true
             requestedScreen = ""
         },
         onDismiss = {
             pendingUri = ""
             claiming = false
-            failure = ""
+            failure = null
         },
     )
 }

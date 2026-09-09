@@ -25,6 +25,8 @@ const (
 	nodeIDSuffixBytes = 4
 	nodeIDSuffixLen   = 2*nodeIDSuffixBytes + 1
 	nodeIDMintTries   = 8
+	// The one body every 401 from the claim endpoint carries.
+	claimRejectedMessage = "pairing code was not accepted"
 	// The dashboard is served from this process in personal mode, so the
 	// policy nginx applies in server mode is applied here instead.
 	dashboardCSP = "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; " +
@@ -80,7 +82,7 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 	// here, and personal mode has no proxy in front of it anyway.
 	if err := s.pairing.Claim(r.RemoteAddr, request.Code); err != nil {
 		s.logger.Warn("pairing claim rejected", "event", "pairing_claim_failed", "error", err.Error())
-		writeError(w, claimStatus(err), err.Error())
+		writeError(w, claimStatus(err), claimMessage(err))
 		return
 	}
 
@@ -108,6 +110,17 @@ func claimStatus(err error) int {
 		return http.StatusTooManyRequests
 	}
 	return http.StatusUnauthorized
+}
+
+// claimMessage keeps the status code's promise: every 401 carries the same
+// body, so no code, an expired code and a wrong code are indistinguishable to
+// the caller. The specific reason is in the logger.Warn line above. The rate
+// limiter is already visible in its own status, so it says what it is.
+func claimMessage(err error) string {
+	if errors.Is(err, personal.ErrPairingRateLimited) {
+		return err.Error()
+	}
+	return claimRejectedMessage
 }
 
 // mintNode registers the phone under the node ID it asked for when that ID is

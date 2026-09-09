@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: setup test test-core test-go test-android android-apk test-docker test-live smoke clean package
+.PHONY: setup test test-core test-go test-e2e test-android android-apk test-docker test-live smoke clean package
 
 setup:
 	./scripts/setup.sh $${DOMAIN:-pocketexit.local}
@@ -13,6 +13,13 @@ test-core:
 
 test-go:
 	cd backend && go test ./... && go vet ./... && go test -race ./...
+
+# The two process-level tests scripts/test.sh runs after the smoke test, on
+# their own: both build the backend and drive it over a real socket, so they
+# need nothing beyond Go, curl and python3.
+test-e2e:
+	./.github/e2e/personal-smoke.sh
+	python3 .github/e2e/socks-e2e.py
 
 test-android:
 	cd android && ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug

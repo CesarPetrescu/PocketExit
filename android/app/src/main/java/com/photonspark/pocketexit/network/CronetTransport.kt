@@ -263,8 +263,7 @@ class CronetTransport(
             completion.complete(HttpResponse(status, bytes, protocol))
             return
         }
-        val stream = response.body?.byteStream()
-            ?: throw IOException("Server sent no response body")
+        val stream = response.body.byteStream()
         val chunk = ByteArray(64 * 1024)
         while (true) {
             val read = stream.read(chunk)

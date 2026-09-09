@@ -1,5 +1,7 @@
 package com.photonspark.pocketexit.network
 
+import android.net.Network
+import com.photonspark.pocketexit.data.AgentConfig
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
@@ -15,11 +17,42 @@ import org.json.JSONObject
  * QR carried. This is the one request the agent makes before it has any
  * credentials, so it is also the first place the pin is exercised: a wrong key
  * on the far end fails here rather than silently at the first heartbeat.
+ *
+ * [network] is the Android network the claim leaves over, as every other agent
+ * request already does. A personal-mode laptop answers on the LAN, so a claim
+ * left to the default route would go out over cellular and never arrive. Null
+ * means there is no better choice than the default route.
  */
 class PairingClient(
     private val serverUrl: String,
     private val pin: String,
+    private val network: Network? = null,
 ) {
+    /**
+     * Why a claim produced no token. The reason is typed rather than worded
+     * here: every string a person reads is a resource, resolved by the
+     * composable that shows it.
+     */
+    enum class Failure {
+        /** `401`: no code is active, the code expired, or it did not match. */
+        CODE_REJECTED,
+
+        /** `429`: too many claim attempts from this address. */
+        RATE_LIMITED,
+
+        /** `400`: the server would not accept the request as sent. */
+        REQUEST_REJECTED,
+
+        /** Any other status. The status itself is on the result. */
+        UNEXPECTED_STATUS,
+
+        /** No answer at all: transport failure, or a pin mismatch. */
+        UNREACHABLE,
+
+        /** `200`, with a body this agent cannot use. */
+        MALFORMED_RESPONSE,
+    }
+
     sealed interface Result {
         data class Paired(
             val nodeId: String,
@@ -30,17 +63,13 @@ class PairingClient(
             val socksUsername: String,
         ) : Result
 
-        /** `401`: no code is active, the code expired, or it did not match. */
-        data class CodeRejected(val message: String) : Result
-
-        /** `429`: too many claim attempts from this address. */
-        data class RateLimited(val message: String) : Result
-
-        /** `400`: the server would not accept the request as sent. */
-        data class RequestRejected(val message: String) : Result
-
-        /** No usable answer: transport failure, pin mismatch, or an unexpected status. */
-        data class Unreachable(val message: String) : Result
+        data class Failed(
+            val reason: Failure,
+            /** The server's own `error` field, or the transport's message. May be empty. */
+            val detail: String = "",
+            /** The HTTP status, for [Failure.UNEXPECTED_STATUS]. */
+            val status: Int = 0,
+        ) : Result
     }
 
     suspend fun claim(
@@ -48,13 +77,19 @@ class PairingClient(
         deviceName: String,
         nodeId: String = "",
     ): Result = withContext(Dispatchers.IO) {
-        val client = PinnedTrust.clientBuilder(pin)
+        val builder = PinnedTrust.clientBuilder(pin)
             .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .callTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .retryOnConnectionFailure(false)
-            .build()
+        // The pin composes with the per-network binding rather than replacing
+        // it, exactly as the circuit and control clients do.
+        if (network != null) {
+            builder.socketFactory(network.socketFactory)
+                .dns { hostname -> network.getAllByName(hostname).toList() }
+        }
+        val client = builder.build()
         try {
             send(client, code, deviceName, nodeId)
         } finally {
@@ -85,62 +120,52 @@ class PairingClient(
                 val body = response.peekBody(MAX_BODY_BYTES).string()
                 when (response.code) {
                     200 -> paired(body)
-                    400 -> Result.RequestRejected(
-                        detailed("The server rejected the pairing request.", body),
-                    )
-                    401 -> Result.CodeRejected(
-                        detailed(
-                            "That pairing code was not accepted. Mint a fresh code on the " +
-                                "server and scan it again.",
-                            body,
-                        ),
-                    )
-                    429 -> Result.RateLimited(
-                        detailed(
-                            "Too many pairing attempts. Wait ten minutes and try again.",
-                            body,
-                        ),
-                    )
-                    else -> Result.Unreachable(
-                        detailed("The server answered HTTP ${response.code}.", body),
+                    400 -> Result.Failed(Failure.REQUEST_REJECTED, serverDetail(body))
+                    401 -> Result.Failed(Failure.CODE_REJECTED, serverDetail(body))
+                    429 -> Result.Failed(Failure.RATE_LIMITED, serverDetail(body))
+                    else -> Result.Failed(
+                        Failure.UNEXPECTED_STATUS,
+                        serverDetail(body),
+                        response.code,
                     )
                 }
             }
         } catch (error: IOException) {
             // A pin mismatch arrives as a handshake failure wrapping the
             // CertificateException, so the innermost message is the diagnosis.
-            Result.Unreachable("Could not reach the server: ${rootMessage(error)}")
+            Result.Failed(Failure.UNREACHABLE, rootMessage(error))
         }
     }
 
     private fun paired(body: String): Result {
         val json = runCatching { JSONObject(body) }.getOrNull()
-            ?: return Result.Unreachable("The server sent a malformed pairing response")
+            ?: return Result.Failed(Failure.MALFORMED_RESPONSE)
         val nodeId = json.optString("node_id").trim()
         val agentToken = json.optString("agent_token").trim()
-        if (nodeId.isEmpty() || agentToken.isEmpty()) {
-            return Result.Unreachable("The server sent an incomplete pairing response")
+        // The assigned id is stored exactly as it arrived, so an id this phone
+        // cannot store verbatim is a bad response rather than something to
+        // quietly rewrite into a name the registry has never heard of.
+        if (agentToken.isEmpty() || !AgentConfig.isValidNodeId(nodeId)) {
+            return Result.Failed(Failure.MALFORMED_RESPONSE)
         }
         val socks = json.optJSONObject("socks")
         return Result.Paired(
             nodeId = nodeId,
             agentToken = agentToken,
             serverUrl = json.optString("server_url").trim().trimEnd('/').ifEmpty { origin() },
-            socksHost = socks?.optString("host").orEmpty(),
+            socksHost = socks?.optString("host").orEmpty().trim(),
             socksPort = socks?.optInt("port") ?: 0,
-            socksUsername = socks?.optString("username").orEmpty(),
+            socksUsername = socks?.optString("username").orEmpty().trim(),
         )
     }
 
     private fun origin(): String = serverUrl.trim().trimEnd('/')
 
-    private fun detailed(message: String, body: String): String {
-        val detail = runCatching { JSONObject(body).optString("error") }
+    private fun serverDetail(body: String): String =
+        runCatching { JSONObject(body).optString("error") }
             .getOrNull()
             .orEmpty()
             .trim()
-        return if (detail.isEmpty()) message else "$message ($detail)"
-    }
 
     private fun rootMessage(error: Throwable): String {
         var cause: Throwable? = error

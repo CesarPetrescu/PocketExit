@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -89,6 +90,16 @@ func Open(directory string) (*Store, error) {
 			directory, mode, directory)
 	}
 
+	// The directory mode says nothing about the files inside it: state.json and
+	// the TLS private key can arrive group- or world-readable from a backup
+	// restore, a copy from another machine or an extracted tarball. Both are
+	// written 0600 and are refused on the same terms as the directory.
+	for _, name := range []string{stateFileName, keyFileName} {
+		if err := requireOwnerOnlyFile(filepath.Join(directory, name)); err != nil {
+			return nil, err
+		}
+	}
+
 	store := &Store{
 		directory: directory,
 		state: State{
@@ -101,6 +112,25 @@ func Open(directory string) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+// requireOwnerOnlyFile refuses a secret file that anybody but its owner can
+// read. A file that does not exist yet is the first run and is fine: the
+// writer creates it 0600.
+func requireOwnerOnlyFile(path string) error {
+	info, err := os.Stat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("inspect %s: %w", path, err)
+	}
+	if mode := info.Mode().Perm(); mode&0o077 != 0 {
+		return fmt.Errorf(
+			"%s has mode %#o and must not be accessible to group or other: run chmod 600 %s",
+			path, mode, path)
+	}
+	return nil
 }
 
 func (s *Store) load() error {
@@ -314,6 +344,30 @@ func writeFileAtomic(path string, payload []byte, perm os.FileMode) error {
 	}
 	if err := os.Rename(name, path); err != nil {
 		return fmt.Errorf("rename %s to %s: %w", name, path, err)
+	}
+	// Syncing the temporary file only makes its contents durable. The rename
+	// itself lives in the directory, so without this a crash straight after a
+	// claim can lose the agent token the phone has already been told it is
+	// paired with.
+	return syncDirectory(directory)
+}
+
+// syncDirectory flushes a directory entry to disk. Not every filesystem
+// implements fsync on a directory: those report ENOTSUP or EINVAL, and since
+// the file itself is already written that is not a failure worth refusing a
+// claim over.
+func syncDirectory(directory string) error {
+	handle, err := os.Open(directory)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", directory, err)
+	}
+	if err := handle.Sync(); err != nil &&
+		!errors.Is(err, errors.ErrUnsupported) && !errors.Is(err, syscall.EINVAL) {
+		handle.Close()
+		return fmt.Errorf("sync %s: %w", directory, err)
+	}
+	if err := handle.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", directory, err)
 	}
 	return nil
 }

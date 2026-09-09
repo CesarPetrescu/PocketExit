@@ -13,7 +13,6 @@ need() {
 }
 
 need openssl
-need python3
 
 random_secret() {
   openssl rand -hex 32

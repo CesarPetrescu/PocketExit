@@ -14,7 +14,7 @@ count, it comes from a functional check that happened to be timed.
 | Area | Verified | Where |
 |---|---|---|
 | Go unit, integration, and race tests | Yes, every push | CI job *Go tests* |
-| Go statement coverage | 65.0% on 2026-09-09, floor 62.0% | CI job *Go tests* |
+| Go statement coverage | 65.1% at `aeccaad`, floor 62.0% | CI job *Go tests* |
 | Server-mode process smoke test | Yes, every push | `scripts/smoke-backend.sh` |
 | Personal-mode pairing smoke test | Yes, every push | `.github/e2e/personal-smoke.sh` |
 | SOCKS5 TCP and UDP end to end | Yes, every push | `.github/e2e/socks-e2e.py` |
@@ -30,24 +30,28 @@ real backend process with a scripted client standing in for the phone.
 
 ## Run on 2026-09-09
 
-Executed in a Linux container with Go 1.24.7, against commit `830b229`
-(`claude/repo-ci-gha-audit-ijcwvf`). Commands and their actual results:
+Executed in a Linux container with Go 1.24.7, against commit `aeccaad`
+(`claude/repo-ci-gha-audit-ijcwvf`), which is `HEAD` as this file is written.
+Every figure below was re-measured at that commit. An earlier revision of this
+section quoted `830b229`, which is six commits behind: neither end-to-end script
+it listed existed there, and the `nodes` registry and `personal` certificate
+tests have grown since. Commands and their actual results:
 
 ```text
 $ go test -race -covermode=atomic -coverprofile=coverage.out ./...
-ok      .../backend/cmd/server            1.024s  coverage: 8.1% of statements
-ok      .../backend/internal/circuit      1.025s  coverage: 67.6% of statements
-ok      .../backend/internal/config       1.036s  coverage: 87.0% of statements
-ok      .../backend/internal/httpapi      2.650s  coverage: 64.3% of statements
+ok      .../backend/cmd/server            1.031s  coverage: 7.9% of statements
+ok      .../backend/internal/circuit      1.026s  coverage: 67.6% of statements
+ok      .../backend/internal/config       1.038s  coverage: 87.0% of statements
+ok      .../backend/internal/httpapi      2.774s  coverage: 64.0% of statements
         .../backend/internal/model                coverage: 0.0% of statements
-ok      .../backend/internal/nodes        1.045s  coverage: 70.4% of statements
-ok      .../backend/internal/personal     2.775s  coverage: 82.4% of statements
-ok      .../backend/internal/protocol     1.018s  coverage: 75.0% of statements
-ok      .../backend/internal/proxy        1.035s  coverage: 70.2% of statements
+ok      .../backend/internal/nodes        1.033s  coverage: 73.6% of statements
+ok      .../backend/internal/personal     2.793s  coverage: 82.5% of statements
+ok      .../backend/internal/protocol     1.023s  coverage: 75.0% of statements
+ok      .../backend/internal/proxy        1.039s  coverage: 70.2% of statements
 ok      .../backend/internal/security     1.023s  coverage: 84.0% of statements
 
 $ go tool cover -func=coverage.out | tail -1
-total:                                  (statements)            65.0%
+total:                                  (statements)            65.1%
 
 $ go vet ./...            # clean
 $ gofmt -l .              # no output
@@ -76,8 +80,8 @@ Source policy checks passed
 ```
 
 The coverage floor in CI is 62.0%, set just under the observed `-race` range so
-it ratchets upward rather than flapping. The 65.0% figure above is one
-measurement on one day, not a target.
+it ratchets upward rather than flapping. The 65.1% figure above is one
+measurement of one commit, not a target.
 
 ### Personal mode, manually exercised the same day
 
@@ -233,7 +237,7 @@ Also executed on 2026-08-10, against the delivered source package:
 
 **Superseded number:** that session reported combined Go statement coverage of
 56.8%–58.9%. It described a different tree and should not be compared with the
-65.0% above.
+65.1% above.
 
 ## Still unmeasured on physical hardware
 

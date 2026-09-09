@@ -55,6 +55,7 @@ internal fun HomeScreen(
     runtime: AgentRuntime,
     message: String,
     pairedNotice: Boolean,
+    socks: SocksHint?,
     onToggle: () -> Unit,
     onReconnect: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -63,7 +64,7 @@ internal fun HomeScreen(
     modifier: Modifier = Modifier,
 ) {
     val now by rememberClock()
-    val state = connectionState(runtime, now)
+    val state = connectionState(runtime, now, config.controlAcceptsUnvalidatedWifi)
 
     Scaffold(
         modifier = modifier.fillMaxSize().safeDrawingPadding(),
@@ -85,7 +86,7 @@ internal fun HomeScreen(
                 actionDescription = stringResource(R.string.home_settings),
             )
             if (message.isNotBlank()) MessageBanner(message)
-            if (pairedNotice) PairedCard(config, onDismissNotice)
+            if (pairedNotice) PairedCard(config, socks, onDismissNotice)
             StatusCard(
                 state = state,
                 runtime = runtime,
@@ -114,8 +115,14 @@ private fun rememberClock(): State<Long> {
     return now
 }
 
+/**
+ * The `socks` block the claim answered with: where the computer points its own
+ * proxy settings. Display only, and it carries no password.
+ */
+internal data class SocksHint(val host: String, val port: Int, val username: String)
+
 @Composable
-private fun PairedCard(config: AgentConfig, onDismiss: () -> Unit) {
+private fun PairedCard(config: AgentConfig, socks: SocksHint?, onDismiss: () -> Unit) {
     SectionCard(container = PanelRaised) {
         Text(
             text = stringResource(R.string.home_paired_title, formatOrigin(config.normalizedServerUrl)),
@@ -128,6 +135,18 @@ private fun PairedCard(config: AgentConfig, onDismiss: () -> Unit) {
             style = MaterialTheme.typography.bodyMedium,
             color = Muted,
         )
+        if (socks != null) {
+            Text(
+                text = stringResource(
+                    R.string.home_paired_socks,
+                    socks.host,
+                    socks.port,
+                    socks.username,
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = Ink,
+            )
+        }
         QuietButton(
             text = stringResource(R.string.home_paired_dismiss),
             onClick = onDismiss,

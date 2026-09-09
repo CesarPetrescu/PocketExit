@@ -5,8 +5,10 @@
 # would only argue with the existing idiom (value receivers on Config, if/else
 # chains, De Morgan rewrites) are off on purpose.
 #
-# It runs from the repository root against ./backend/..., so paths in the
-# exclusions below are repository-relative.
+# CI runs golangci-lint from backend/ (the action's working-directory), which
+# is also where it picks this file up by walking to the repository root. Paths
+# in the exclusions below are therefore relative to backend/, not to the
+# repository root.
 version: "2"
 
 run:

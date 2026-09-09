@@ -67,11 +67,29 @@ data class AgentConfig(
     val normalizedServerUrl: String
         get() = serverUrl.trim().trimEnd('/')
 
+    /**
+     * Personal mode as the pairing protocol defines it: the server authenticates
+     * itself by a pin, or it sits at a private address. A server-mode
+     * deployment has neither.
+     */
+    val personalMode: Boolean
+        get() = pin.isNotEmpty() || hasPrivateHost(normalizedServerUrl)
+
+    /**
+     * Whether the control channel may use a Wi-Fi network Android has not
+     * validated. A personal-mode laptop on a phone hotspot, a LAN-only router,
+     * or a captive network is one hop away over a link that will never be
+     * validated, because there is no Internet behind it to validate. Exit
+     * traffic is a different question and keeps the stricter rule.
+     */
+    val controlAcceptsUnvalidatedWifi: Boolean
+        get() = personalMode && hasPrivateHost(normalizedServerUrl)
+
     fun validationError(): String? {
         serverUrlError(normalizedServerUrl)?.let { return it }
         return when {
             nodeId.isBlank() -> "Node ID is required"
-            !nodeId.matches(Regex("[A-Za-z0-9._-]{1,64}")) ->
+            !isValidNodeId(nodeId) ->
                 "Node ID may contain letters, digits, dots, underscores, and dashes"
             deviceName.trim().isEmpty() -> "Device name is required"
             deviceName.length > 128 -> "Device name must be at most 128 characters"
@@ -117,6 +135,57 @@ data class AgentConfig(
             val decoded = runCatching { Base64.getUrlDecoder().decode(pin) }.getOrNull()
             return decoded != null && decoded.size == PIN_BYTES
         }
+
+        /**
+         * The character set the server sanitises a node id into. An id that
+         * already matches is stored exactly as it arrived.
+         */
+        fun isValidNodeId(value: String): Boolean = value.matches(NODE_ID_PATTERN)
+
+        /**
+         * True when [serverUrl] names a literal private, loopback, or
+         * link-local address — the shape a personal-mode laptop has on a LAN.
+         * Names are never resolved here: this is asked on the main thread, and
+         * a lookup would both block and give an answer that moves with the
+         * network.
+         */
+        fun hasPrivateHost(serverUrl: String): Boolean {
+            val host = runCatching { URI(serverUrl.trim()) }.getOrNull()?.host?.trim().orEmpty()
+            if (host.isEmpty()) return false
+            if (host.equals("localhost", ignoreCase = true)) return true
+            val literal = host.removeSurrounding("[", "]")
+            return if (literal.contains(':')) privateIPv6(literal) else privateIPv4(literal)
+        }
+
+        private fun privateIPv4(host: String): Boolean {
+            val parts = host.split('.')
+            if (parts.size != 4) return false
+            val octets = parts.map { part -> part.toIntOrNull() ?: return false }
+            if (octets.any { it !in 0..255 }) return false
+            val a = octets[0]
+            val b = octets[1]
+            return when {
+                a == 10 -> true
+                a == 127 -> true
+                a == 169 && b == 254 -> true
+                a == 172 && b in 16..31 -> true
+                a == 192 && b == 168 -> true
+                a == 100 && b in 64..127 -> true // carrier-grade NAT
+                else -> false
+            }
+        }
+
+        private fun privateIPv6(host: String): Boolean {
+            // A scope id says "link local" on its own, and never survives into
+            // a URI the phone can dial anyway.
+            val address = host.substringBefore('%').lowercase(Locale.US)
+            if (address == "::1") return true
+            val group = address.substringBefore(':').toIntOrNull(16) ?: return false
+            // fc00::/7 unique local, fe80::/10 link local.
+            return group shr 9 == 0x7e || group shr 6 == 0x3fa
+        }
+
+        private val NODE_ID_PATTERN = Regex("[A-Za-z0-9._-]{1,64}")
 
         private const val PIN_ALPHABET =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"

@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import com.photonspark.pocketexit.R
 import com.photonspark.pocketexit.data.AgentConfig
 import com.photonspark.pocketexit.data.OnboardingLink
+import com.photonspark.pocketexit.network.PairingClient
 
 /**
  * Everything a `pocketexit://configure` link can be waiting on. Only [Idle]
@@ -33,7 +34,10 @@ internal sealed interface PairingFlow {
     data class Working(val link: OnboardingLink.Pairing) : PairingFlow
 
     /** The claim came back with one of the typed failures. */
-    data class Failed(val link: OnboardingLink.Pairing, val message: String) : PairingFlow
+    data class Failed(
+        val link: OnboardingLink.Pairing,
+        val failure: PairingClient.Result.Failed,
+    ) : PairingFlow
 
     /** A version 1 link, which carries its own token and only needs confirming. */
     data class Import(val config: AgentConfig) : PairingFlow
@@ -54,7 +58,7 @@ internal fun PairingSheet(
         PairingFlow.Idle -> Unit
         is PairingFlow.Confirm -> ConfirmSheet(flow.link, deviceName, onConfirmPairing, onDismiss)
         is PairingFlow.Working -> WorkingSheet(flow.link)
-        is PairingFlow.Failed -> FailedSheet(flow.link, flow.message, onConfirmPairing, onDismiss)
+        is PairingFlow.Failed -> FailedSheet(flow.link, flow.failure, onConfirmPairing, onDismiss)
         is PairingFlow.Import -> ImportSheet(flow.config, onConfirmImport, onDismiss)
         is PairingFlow.Rejected -> RejectedSheet(flow.message, onDismiss)
     }
@@ -112,15 +116,13 @@ private fun WorkingSheet(link: OnboardingLink.Pairing) {
 @Composable
 private fun FailedSheet(
     link: OnboardingLink.Pairing,
-    message: String,
+    failure: PairingClient.Result.Failed,
     onRetry: (OnboardingLink.Pairing) -> Unit,
     onDismiss: () -> Unit,
 ) {
     BottomSheetDialog(onDismissRequest = onDismiss) {
         SheetTitle(stringResource(R.string.pair_failed_title))
-        // The claim client's messages are already specific and safe to show, so
-        // they are shown as written rather than folded into a generic failure.
-        SheetBody(text = message, color = Danger)
+        SheetBody(text = failureMessage(failure), color = Danger)
         SheetBody(stringResource(R.string.pair_failed_hint))
         ServerFacts(link)
         SheetActions(
@@ -129,6 +131,32 @@ private fun FailedSheet(
             onCancel = onDismiss,
             cancelText = stringResource(R.string.action_close),
         )
+    }
+}
+
+/**
+ * The claim reports why it failed; the wording lives here, with every other
+ * string a person reads. The server's own detail is appended when it sent one,
+ * because "that code was not accepted" and "that code expired four minutes ago"
+ * lead to different next moves.
+ */
+@Composable
+private fun failureMessage(failure: PairingClient.Result.Failed): String {
+    val message = when (failure.reason) {
+        PairingClient.Failure.CODE_REJECTED -> stringResource(R.string.pair_error_code_rejected)
+        PairingClient.Failure.RATE_LIMITED -> stringResource(R.string.pair_error_rate_limited)
+        PairingClient.Failure.REQUEST_REJECTED ->
+            stringResource(R.string.pair_error_request_rejected)
+        PairingClient.Failure.UNEXPECTED_STATUS ->
+            stringResource(R.string.pair_error_unexpected_status, failure.status)
+        PairingClient.Failure.UNREACHABLE -> stringResource(R.string.pair_error_unreachable)
+        PairingClient.Failure.MALFORMED_RESPONSE ->
+            stringResource(R.string.pair_error_malformed_response)
+    }
+    return if (failure.detail.isBlank()) {
+        message
+    } else {
+        stringResource(R.string.pair_error_detail, message, failure.detail)
     }
 }
 

@@ -284,7 +284,11 @@ flowchart TB
 
 ## Prerequisites
 
-- Docker Engine with the Compose plugin, and OpenSSL
+- Docker Engine with the Compose plugin
+- `openssl` on the host — `scripts/setup.sh`, which `make setup` runs, checks
+  for it and exits before writing anything if it is missing
+- `python3` only to run the test suite (`make test`), not to bring the gateway
+  up
 - A DNS name pointing at the host
 - TCP 80, TCP/UDP 443, TCP 1080 or TLS/TCP 1081, and optional UDP 12000–12031
 
@@ -330,9 +334,43 @@ Add the one-time connector token to `.env` as `SPARK_TUNNEL_TOKEN`, then:
 docker compose --profile tunnel -f docker-compose.yml -f docker-compose.tunnel.yml up --build -d
 ```
 
-SparkTunnel carries the dashboard, API, agent control, and circuit WebSockets.
-It does **not** publish raw SOCKS5 TCP or the UDP relay ports, so clients still
-need direct or VPN access to 1080/1081 and 12000–12031.
+`docker-compose.tunnel.yml` is three lines, and what they do matters: they set
+`ports: !override []` on nginx, the only service in the stack that publishes
+anything. **With that overlay in place the host publishes no ports at all** —
+80, 443 over TCP and UDP, 1080, 1081, and 12000–12031 all disappear from the
+host, not just the SOCKS ones. Everything then arrives through the connector,
+which forwards to nginx's internal plain-HTTP `8081` origin: the dashboard,
+`/api/`, `/agent/`, and the circuit WebSockets. SOCKS5 is not HTTP and does not
+cross the tunnel.
+
+So the overlay on its own gives you a reachable control plane and no way to send
+traffic through it. To keep SOCKS reachable, add a third file that re-publishes
+exactly the ports you want — Compose appends to the emptied list — and pass it
+last:
+
+```yaml
+# docker-compose.socks.yml
+services:
+  nginx:
+    ports:
+      - "1081:1081/tcp"                # TLS-wrapped SOCKS5
+      - "12000-12031:12000-12031/udp"  # only if you need UDP ASSOCIATE
+```
+
+```bash
+docker compose --profile tunnel \
+  -f docker-compose.yml -f docker-compose.tunnel.yml -f docker-compose.socks.yml \
+  up --build -d
+```
+
+Publish to loopback instead (`"127.0.0.1:1081:1081/tcp"`) if the client will
+reach the host over SSH or a VPN rather than from the Internet. Either way,
+confirm what you actually published before opening a firewall:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.tunnel.yml \
+  -f docker-compose.socks.yml config | grep -A4 'ports:'
+```
 
 </details>
 
@@ -341,16 +379,28 @@ need direct or VPN access to 1080/1081 and 12000–12031.
 `make setup` writes `AGENT_TOKENS_JSON={"s20u":"…","s22u":"…","s24u":"…"}` into
 `.env`. Install the APK — either the signed one from the
 [latest release](https://github.com/CesarPetrescu/PocketExit/releases/latest)
-or a debug build from `make android-apk` — then on each phone open
-**Settings → Manual setup** and enter:
+or a debug build from `make android-apk` — then on each phone tap
+**Enter server details manually** on the first-run screen, which opens
+**Settings** with its **Manual setup** card at the top. Fill in the **Server**
+card:
 
 | Field | Example |
 |---|---|
-| Backend URL | `https://proxy.example.com` |
+| Server URL | `https://proxy.example.com` |
 | Node ID | `s20u`, `s22u`, or `s24u` |
+| Device name | pre-filled with the phone's model; any non-empty label works |
 | Agent token | the matching value from `AGENT_TOKENS_JSON` |
-| Control tunnel | Wi-Fi preferred |
-| Proxy exit | Cellular only, or Cellular preferred |
+
+`Certificate pin` sits under those and is not typed: it reads **Platform
+certificate store** for a server-mode deployment, which is exactly right when
+nginx holds a certificate Android already trusts. Then, in the **Routing** card:
+
+| Field | Example |
+|---|---|
+| Control channel | Wi-Fi preferred |
+| Exit traffic | Cellular only, or Cellular preferred |
+
+Press **Save** — it reads **Save and reconnect** while the node is running.
 
 Or skip the typing: once a node has sent one heartbeat, the dashboard's **Pair phone**
 action on that node renders a `v=1` onboarding QR. Scan it with the phone's
@@ -390,6 +440,10 @@ curl --proxy socks5h://proxy.example.com:1080 \
 | `12000–12031` | UDP | yes | SOCKS5 UDP relay pool, one port per association |
 | `8080` | TCP | **no** | Go HTTP API, internal bridge only |
 | `8081` | TCP | **no** | Plain-HTTP origin for the optional SparkTunnel connector |
+
+The **Published** column describes `docker-compose.yml` on its own. Adding
+`docker-compose.tunnel.yml` turns every `yes` in it into a no; see the
+SparkTunnel section above.
 
 ## Configuration
 

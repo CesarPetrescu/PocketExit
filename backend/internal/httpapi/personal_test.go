@@ -285,6 +285,71 @@ func TestClaimStatusMapsPairingFailures(t *testing.T) {
 	}
 }
 
+func TestClaimMessageIsUniformForEveryRejectedCode(t *testing.T) {
+	for _, err := range []error{personal.ErrNoPairingCode, personal.ErrPairingCodeExpired, personal.ErrPairingCodeInvalid} {
+		if message := claimMessage(err); message != claimRejectedMessage {
+			t.Fatalf("%v produced body %q, expected %q", err, message, claimRejectedMessage)
+		}
+	}
+	if message := claimMessage(personal.ErrPairingRateLimited); message != personal.ErrPairingRateLimited.Error() {
+		t.Fatalf("rate limit produced body %q, expected %q", message, personal.ErrPairingRateLimited.Error())
+	}
+}
+
+// The status code promises a caller cannot tell an expired code from a wrong
+// one, so the bodies of the 401s a caller can actually provoke are compared
+// against each other rather than against a literal.
+func TestPersonalClaimRejectionsAreIndistinguishable(t *testing.T) {
+	bodies := map[string]string{}
+	for _, scenario := range []struct {
+		name string
+		mint bool
+		burn bool
+	}{
+		{name: "no active code"},
+		{name: "wrong code", mint: true},
+		{name: "consumed code", mint: true, burn: true},
+	} {
+		server, store := newPersonalTestServer(t, nil)
+		code := "Z9Y8-X7W6"
+		if scenario.mint {
+			minted := mintPairingCodeForTest(t, server, store.AdminToken())
+			if scenario.burn {
+				claimed := personalRequest(t, http.MethodPost, server.URL+"/pair/v1/claim", "", claimRequest{
+					Code:       minted.Code,
+					DeviceName: "Pixel 8",
+				})
+				claimed.Body.Close()
+				if claimed.StatusCode != http.StatusOK {
+					t.Fatalf("%s: first claim status %d", scenario.name, claimed.StatusCode)
+				}
+				code = minted.Code
+			}
+		}
+		response := personalRequest(t, http.MethodPost, server.URL+"/pair/v1/claim", "", claimRequest{
+			Code:       code,
+			DeviceName: "Pixel 8",
+		})
+		payload, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("%s: status %d, expected 401", scenario.name, response.StatusCode)
+		}
+		bodies[scenario.name] = string(payload)
+	}
+	for name, body := range bodies {
+		if body != bodies["no active code"] {
+			t.Fatalf("%s answered %q, which differs from %q", name, body, bodies["no active code"])
+		}
+		if strings.Contains(body, "expired") || strings.Contains(body, "no pairing code") {
+			t.Fatalf("%s leaked the reason in %q", name, body)
+		}
+	}
+}
+
 func TestPersonalClaimIsRateLimited(t *testing.T) {
 	server, store := newPersonalTestServer(t, nil)
 	mintPairingCodeForTest(t, server, store.AdminToken())

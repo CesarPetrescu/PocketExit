@@ -31,8 +31,16 @@ class AppPreferences(context: Context) : SharedPreferences.OnSharedPreferenceCha
         preferences.registerOnSharedPreferenceChangeListener(this)
     }
 
-    fun save(config: AgentConfig) {
-        val normalizedNodeId = sanitizeNodeId(config.nodeId)
+    /**
+     * [sanitizeNodeId] rewrites the node id into the characters the registry
+     * accepts, which is right for an id somebody typed into the settings form.
+     * An id the server assigned at pairing is stored exactly as it arrived:
+     * rewriting that one would leave this phone calling itself something the
+     * server has never heard of, and the claim already rejects an id it cannot
+     * store verbatim.
+     */
+    fun save(config: AgentConfig, sanitizeNodeId: Boolean = true) {
+        val normalizedNodeId = if (sanitizeNodeId) sanitized(config.nodeId) else config.nodeId.trim()
         preferences.edit()
             .putString(KEY_SERVER_URL, config.normalizedServerUrl)
             // The pin is a public hash, not a secret, so it lives beside the
@@ -104,12 +112,12 @@ class AppPreferences(context: Context) : SharedPreferences.OnSharedPreferenceCha
     }
 
     private fun defaultNodeId(): String {
-        val model = sanitizeNodeId(Build.MODEL.lowercase(Locale.US))
+        val model = sanitized(Build.MODEL.lowercase(Locale.US))
         val suffix = UUID.randomUUID().toString().take(8)
         return "${model.ifBlank { "android" }}-$suffix"
     }
 
-    private fun sanitizeNodeId(value: String): String = value.trim()
+    private fun sanitized(value: String): String = value.trim()
         .replace(Regex("[^A-Za-z0-9._-]"), "-")
         .trim('-')
         .take(64)

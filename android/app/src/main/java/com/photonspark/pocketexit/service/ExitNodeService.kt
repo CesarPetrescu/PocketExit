@@ -22,6 +22,7 @@ import com.photonspark.pocketexit.data.NetworkKind
 import com.photonspark.pocketexit.data.RuntimeStore
 import com.photonspark.pocketexit.network.CronetTransport
 import com.photonspark.pocketexit.network.NetworkMonitor
+import com.photonspark.pocketexit.network.PolicySelector
 import com.photonspark.pocketexit.network.WebSocketTransport
 import com.photonspark.pocketexit.proxy.CircuitManager
 import com.photonspark.pocketexit.ui.MainActivity
@@ -172,7 +173,11 @@ class ExitNodeService : Service() {
         circuits: CircuitManager,
     ) {
         val config = preferences.current
-        val control = networkMonitor.select(config.controlPolicy)
+        val control = networkMonitor.select(
+            config.controlPolicy,
+            PolicySelector.Scope.CONTROL,
+            config.controlAcceptsUnvalidatedWifi,
+        )
         if (control == null) {
             RuntimeStore.update {
                 it.copy(
@@ -248,7 +253,11 @@ class ExitNodeService : Service() {
         var backoffMs = 1_000L
         while (currentCoroutineContext().isActive && preferences.current.enabled) {
             val config = preferences.current
-            val control = networkMonitor.select(config.controlPolicy)
+            val control = networkMonitor.select(
+                config.controlPolicy,
+                PolicySelector.Scope.CONTROL,
+                config.controlAcceptsUnvalidatedWifi,
+            )
             if (control == null) {
                 RuntimeStore.update {
                     it.copy(
