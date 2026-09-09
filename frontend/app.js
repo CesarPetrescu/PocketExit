@@ -24,6 +24,9 @@ const state = {
   circuits: [],
   pairing: null,
   pairingCode: "",
+  // Bumped by every mint and cancel so a poll that was already in flight
+  // cannot put a stale code back on screen.
+  pairingGeneration: 0,
   personal: false,
   modeKnown: false,
   unpairTarget: null,
@@ -252,23 +255,29 @@ function render() {
 }
 
 async function refreshPairing() {
+  const generation = state.pairingGeneration;
+  let payload = null;
   try {
-    state.pairing = await api("/api/v1/pairing");
+    payload = await api("/api/v1/pairing");
     state.personal = true;
   } catch (error) {
     if (error.status !== 404) throw error;
     // Server mode: pairing is not part of this deployment.
     state.personal = false;
-    state.pairing = null;
   }
   state.modeKnown = true;
+  // A code minted or cancelled while this poll was in flight wins over it.
+  if (generation !== state.pairingGeneration) return;
+  state.pairing = state.personal ? payload : null;
   renderPairing();
 }
 
 async function mintPairingCode() {
   setPairingBusy(true);
   try {
-    state.pairing = await api("/api/v1/pairing", { method: "POST" });
+    const payload = await api("/api/v1/pairing", { method: "POST" });
+    state.pairingGeneration += 1;
+    state.pairing = payload;
     state.personal = true;
     state.modeKnown = true;
     // Force the QR to be redrawn even when the server hands back a code that
@@ -287,6 +296,7 @@ async function cancelPairingCode() {
   setPairingBusy(true);
   try {
     await api("/api/v1/pairing", { method: "DELETE" });
+    state.pairingGeneration += 1;
     await refreshPairing();
     showToast("Pairing code cancelled");
   } catch (error) {
