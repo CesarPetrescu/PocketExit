@@ -287,7 +287,25 @@ func (s *Server) authorizedCircuit(w http.ResponseWriter, r *http.Request) (*cir
 }
 
 func (s *Server) listNodes(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"nodes": s.nodes.List()})
+	writeJSON(w, http.StatusOK, map[string]any{"nodes": s.visibleNodes()})
+}
+
+// visibleNodes hides phones that have been unpaired. The registry keeps its
+// records for the life of the process, and in personal mode a revoked node must
+// not linger on the dashboard; in server mode every record necessarily has a
+// token in AGENT_TOKENS_JSON, so the filter is not applied.
+func (s *Server) visibleNodes() []model.Node {
+	list := s.nodes.List()
+	if s.config.Mode != config.ModePersonal {
+		return list
+	}
+	kept := make([]model.Node, 0, len(list))
+	for _, node := range list {
+		if _, ok := s.tokens.Lookup(node.NodeID); ok {
+			kept = append(kept, node)
+		}
+	}
+	return kept
 }
 
 func (s *Server) onboarding(w http.ResponseWriter, r *http.Request) {
@@ -420,7 +438,7 @@ func (s *Server) closeCircuit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
-	nodesList := s.nodes.List()
+	nodesList := s.visibleNodes()
 	circuits := s.circuits.List()
 	online := 0
 	for _, node := range nodesList {

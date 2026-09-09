@@ -351,6 +351,14 @@ func TestPersonalDeleteNodeRevokesTheToken(t *testing.T) {
 	if _, ok := store.GetNode(claimed.NodeID); ok {
 		t.Fatal("the unpaired node is still in the state directory")
 	}
+	listed := personalRequest(t, http.MethodGet, server.URL+"/api/v1/nodes", store.AdminToken(), nil)
+	var nodeList struct {
+		Nodes []model.Node `json:"nodes"`
+	}
+	decodeBody(t, listed, &nodeList)
+	if len(nodeList.Nodes) != 0 {
+		t.Fatalf("the unpaired node is still listed: %+v", nodeList.Nodes)
+	}
 
 	missing := personalRequest(t, http.MethodDelete, server.URL+"/api/v1/nodes/"+claimed.NodeID, store.AdminToken(), nil)
 	missing.Body.Close()
