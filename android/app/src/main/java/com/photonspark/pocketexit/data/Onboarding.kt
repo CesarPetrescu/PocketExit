@@ -81,9 +81,10 @@ private fun version2(values: Map<String, String>): OnboardingLink.Pairing {
     require(pairingCode.length <= MAX_PAIRING_CODE_LENGTH) { "Pairing code is too long" }
     // The pin is optional: a personal-mode server behind a real certificate
     // pairs without pinning. Present but malformed is a rejection, not a
-    // silent fall back to platform trust.
-    val pin = values["fp"].orEmpty().trim()
-    require(pin.isEmpty() || AgentConfig.isValidPin(pin)) { AgentConfig.PIN_ERROR }
+    // silent fall back to platform trust, so an empty fp is a rejection too.
+    val fingerprint = values["fp"]
+    val pin = fingerprint?.trim().orEmpty()
+    require(fingerprint == null || AgentConfig.isValidPin(pin)) { AgentConfig.PIN_ERROR }
     val serverName = values["name"].orEmpty().trim()
     require(serverName.length <= MAX_SERVER_NAME_LENGTH) {
         "Server name must be at most $MAX_SERVER_NAME_LENGTH characters"
