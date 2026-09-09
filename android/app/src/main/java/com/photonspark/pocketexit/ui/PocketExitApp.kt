@@ -66,6 +66,18 @@ internal fun PocketExitApp(
         }
     }
     val unreadable = stringResource(R.string.pair_link_unreadable)
+
+    // Resolved in composition rather than through LocalContext inside the
+    // handlers below. A string read from the context does not recompose when
+    // the configuration changes, so after a system language switch the banner
+    // would keep showing the previous locale's text.
+    val messageStopping = stringResource(R.string.message_stopping)
+    val messageStarting = stringResource(R.string.message_starting)
+    val messageReconnecting = stringResource(R.string.message_reconnecting)
+    val messageNoNetworkSettings = stringResource(R.string.message_no_network_settings)
+    val settingsSaved = stringResource(R.string.settings_saved)
+    val settingsSavedRestart = stringResource(R.string.settings_saved_restart)
+    val settingsUnpaired = stringResource(R.string.settings_unpaired)
     val link = parsed?.getOrNull()
     val flow: PairingFlow = when {
         parsed == null -> PairingFlow.Idle
@@ -160,7 +172,7 @@ internal fun PocketExitApp(
                     preferences.save(disabled)
                     form = disabled
                     ExitNodeService.stop(context)
-                    message = context.getString(R.string.message_stopping)
+                    message = messageStopping
                 } else {
                     val enabled = savedConfig.copy(enabled = true)
                     val error = enabled.validationError()
@@ -169,7 +181,7 @@ internal fun PocketExitApp(
                         form = enabled
                         ExitNodeService.start(context, restart = false)
                         pairedNotice = false
-                        message = context.getString(R.string.message_starting)
+                        message = messageStarting
                     } else {
                         message = error
                         requestedScreen = Screen.SETTINGS.name
@@ -178,14 +190,14 @@ internal fun PocketExitApp(
             },
             onReconnect = {
                 ExitNodeService.start(context, restart = true)
-                message = context.getString(R.string.message_reconnecting)
+                message = messageReconnecting
             },
             onOpenSettings = { requestedScreen = Screen.SETTINGS.name },
             onOpenNetworkSettings = {
                 val intent = Intent(Settings.ACTION_WIRELESS_SETTINGS)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 if (runCatching { context.startActivity(intent) }.isFailure) {
-                    message = context.getString(R.string.message_no_network_settings)
+                    message = messageNoNetworkSettings
                 }
             },
             onDismissNotice = { pairedNotice = false },
@@ -204,9 +216,7 @@ internal fun PocketExitApp(
                     preferences.save(updated)
                     form = updated
                     if (runtime.running) ExitNodeService.start(context, restart = true)
-                    message = context.getString(
-                        if (runtime.running) R.string.settings_saved_restart else R.string.settings_saved,
-                    )
+                    message = if (runtime.running) settingsSavedRestart else settingsSaved
                 } else {
                     message = error
                 }
@@ -223,7 +233,7 @@ internal fun PocketExitApp(
                 form = cleared
                 pairedNotice = false
                 requestedScreen = ""
-                message = context.getString(R.string.settings_unpaired)
+                message = settingsUnpaired
             },
             onBack = { requestedScreen = "" },
         )
