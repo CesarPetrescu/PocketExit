@@ -80,10 +80,10 @@ That prints everything you need and then serves:
 PocketExit personal mode
 
   Dashboard       https://192.168.1.50:8443/
-  Admin token     J4WsTXCmN7RvodBUjOaOtcfqR4dQ4IJolgo7D1LotW0
+  Admin token     example-admin-token-not-a-real-credential-0
   SOCKS5 proxy    127.0.0.1:1080
   SOCKS username  proxy
-  SOCKS password  bKdAs91INwt95TCDr7wrSUd97EgMmkyJFBeQf8EyddE
+  SOCKS password  example-socks-password-not-a-real-credential
   Certificate pin 3aCuAD5-R6Hm9iPc-PsJyTW4h4ZLsjvI78yCc5qNs-Q
   Certificate     /home/you/.pocketexit/tls.crt
   State directory /home/you/.pocketexit
@@ -163,7 +163,7 @@ Use the SOCKS username and password from the startup block:
 
 ```bash
 curl --proxy socks5h://127.0.0.1:1080 \
-     --proxy-user 'proxy:bKdAs91INwt95TCDr7wrSUd97EgMmkyJFBeQf8EyddE' \
+     --proxy-user 'proxy:example-socks-password-not-a-real-credential' \
      https://api.ipify.org
 # → the public address of the phone, not the laptop's
 ```
@@ -172,7 +172,7 @@ Force this one request onto the SIM even though the phone is on Wi-Fi:
 
 ```bash
 curl --proxy socks5h://127.0.0.1:1080 \
-     --proxy-user 'proxy!cellular:bKdAs91INwt95TCDr7wrSUd97EgMmkyJFBeQf8EyddE' \
+     --proxy-user 'proxy!cellular:example-socks-password-not-a-real-credential' \
      https://api.ipify.org
 ```
 

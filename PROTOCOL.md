@@ -74,7 +74,7 @@ one from `device_name` plus a random suffix.
 ```json
 {
   "node_id": "pixel-8-629b2c2d",
-  "agent_token": "WH5DO8plQpvfzYrse1pTdFhTRL7RF--uadrMG6Mu4CA",
+  "agent_token": "example-agent-token-not-a-real-credential-0",
   "server_url": "https://192.168.1.50:8443",
   "socks": {"host": "127.0.0.1", "port": 1080, "username": "proxy"}
 }
