@@ -135,18 +135,69 @@ func pruneLoop(ctx context.Context, manager *circuit.Manager, logger *slog.Logge
 	}
 }
 
+// newLogger sends every record to two places at once. The terminal follows
+// jsonOutput, because in personal mode a person is reading it and wants text.
+// The audit file is always JSON, whatever the terminal does: it is named
+// .jsonl, the contract points tooling at it, and a file whose lines do not
+// parse as JSON is worse than no file.
 func newLogger(jsonOutput bool, auditPath string) (*slog.Logger, io.Closer, error) {
 	auditFile, err := os.OpenFile(auditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, nil, err
 	}
-	output := io.MultiWriter(os.Stdout, auditFile)
 	options := &slog.HandlerOptions{Level: slog.LevelInfo}
 	if os.Getenv("LOG_LEVEL") == "debug" {
 		options.Level = slog.LevelDebug
 	}
+	var console slog.Handler = slog.NewTextHandler(os.Stdout, options)
 	if jsonOutput {
-		return slog.New(slog.NewJSONHandler(output, options)), auditFile, nil
+		console = slog.NewJSONHandler(os.Stdout, options)
 	}
-	return slog.New(slog.NewTextHandler(output, options)), auditFile, nil
+	audit := slog.NewJSONHandler(auditFile, options)
+	return slog.New(fanOutHandler{handlers: []slog.Handler{console, audit}}), auditFile, nil
+}
+
+// fanOutHandler writes each record to every handler it wraps, so the console
+// and the audit file can use different encodings of the same record.
+type fanOutHandler struct {
+	handlers []slog.Handler
+}
+
+func (f fanOutHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, handler := range f.handlers {
+		if handler.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+
+func (f fanOutHandler) Handle(ctx context.Context, record slog.Record) error {
+	var firstErr error
+	for _, handler := range f.handlers {
+		if !handler.Enabled(ctx, record.Level) {
+			continue
+		}
+		// Each handler gets its own copy: Handle may consume the attributes.
+		if err := handler.Handle(ctx, record.Clone()); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (f fanOutHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	next := make([]slog.Handler, len(f.handlers))
+	for index, handler := range f.handlers {
+		next[index] = handler.WithAttrs(attrs)
+	}
+	return fanOutHandler{handlers: next}
+}
+
+func (f fanOutHandler) WithGroup(name string) slog.Handler {
+	next := make([]slog.Handler, len(f.handlers))
+	for index, handler := range f.handlers {
+		next[index] = handler.WithGroup(name)
+	}
+	return fanOutHandler{handlers: next}
 }
