@@ -135,15 +135,19 @@ func (s *Store) load() error {
 
 	changed := false
 	if s.state.AdminToken == "" {
-		if s.state.AdminToken, err = randomSecret(); err != nil {
+		token, err := randomSecret()
+		if err != nil {
 			return err
 		}
+		s.state.AdminToken = token
 		changed = true
 	}
 	if s.state.SOCKSPassword == "" {
-		if s.state.SOCKSPassword, err = randomSecret(); err != nil {
+		password, err := randomSecret()
+		if err != nil {
 			return err
 		}
+		s.state.SOCKSPassword = password
 		changed = true
 	}
 	if s.state.SOCKSUsername == "" {

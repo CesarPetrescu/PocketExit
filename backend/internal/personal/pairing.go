@@ -70,9 +70,11 @@ func (p *Pairing) Mint() (PairingCode, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.code = code
-	p.expiresAt = p.now().UTC().Add(pairingCodeTTL).Truncate(time.Second)
+	// The deadline keeps whatever monotonic reading the clock carries, so a
+	// wall-clock adjustment cannot extend or shorten the window.
+	p.expiresAt = p.now().Add(pairingCodeTTL)
 	p.attempts = 0
-	return PairingCode{Code: p.code, ExpiresAt: p.expiresAt}, nil
+	return p.snapshot(), nil
 }
 
 func (p *Pairing) Active() (PairingCode, bool) {
@@ -85,7 +87,13 @@ func (p *Pairing) Active() (PairingCode, bool) {
 		p.clear()
 		return PairingCode{}, false
 	}
-	return PairingCode{Code: p.code, ExpiresAt: p.expiresAt}, true
+	return p.snapshot(), true
+}
+
+// snapshot renders the active code for callers. Deadlines leave the store in
+// UTC at second resolution, matching the wire format.
+func (p *Pairing) snapshot() PairingCode {
+	return PairingCode{Code: p.code, ExpiresAt: p.expiresAt.UTC().Truncate(time.Second)}
 }
 
 func (p *Pairing) Cancel() {
