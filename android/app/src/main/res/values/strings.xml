@@ -3,4 +3,166 @@
     <string name="app_name">Pocket Exit</string>
     <string name="notification_channel_name">Exit node status</string>
     <string name="notification_channel_description">Keeps the private exit-node connection active</string>
+
+    <!-- Foreground service notification. The same five honest states the UI shows. -->
+    <string name="notification_starting">Starting</string>
+    <string name="notification_restarting">Restarting</string>
+    <string name="notification_connecting">Connecting to your server</string>
+    <string name="notification_online">Online · %1$s · %2$d circuits</string>
+    <string name="notification_degraded">Running, but your server is not answering</string>
+    <string name="notification_waiting_network">Waiting for a usable network</string>
+    <string name="notification_not_configured">Cannot start: %1$s</string>
+
+    <!-- Runtime status detail, surfaced under the headline state. -->
+    <string name="status_connecting">Connecting</string>
+    <string name="status_online">Online</string>
+    <string name="status_waiting_for">Waiting for %1$s</string>
+    <string name="status_heartbeat_failed">Server did not answer the heartbeat</string>
+    <string name="status_control_reconnecting">Reconnecting to the control channel</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="status_stopped">Stopped</string>
+    <string name="status_stopped_by_user">Stopped by you</string>
+    <string name="status_agent_disabled">Exit node is switched off</string>
+    <string name="status_policies_updated">Routing updated by the server</string>
+
+    <!-- First run. -->
+    <string name="welcome_eyebrow">POCKET EXIT</string>
+    <string name="welcome_title">Pair this phone with your computer</string>
+    <string name="welcome_lead">Your computer prints a pairing code; scanning it with this phone\'s camera hands over everything the phone needs to become your exit node.</string>
+    <string name="welcome_steps_title">How pairing works</string>
+    <string name="welcome_step_number">%1$d</string>
+    <string name="welcome_step_1_title">Start the server</string>
+    <string name="welcome_step_1_detail">Run pocketexit personal on the computer whose traffic you want to send out through this phone.</string>
+    <string name="welcome_step_2_title">Scan the code with the camera</string>
+    <string name="welcome_step_2_detail">Open the phone\'s ordinary camera app and point it at the code on screen. There is no scanner in here, so there is no camera permission to grant.</string>
+    <string name="welcome_step_3_title">Confirm what you see</string>
+    <string name="welcome_step_3_detail">Tap the link the camera offers. Pocket Exit shows you the server address and its certificate fingerprint before it sends anything.</string>
+    <string name="welcome_safety_title">A link on its own changes nothing</string>
+    <string name="welcome_safety_detail">Pairing needs a code the server minted in the last ten minutes, and it needs you to confirm. Until then this phone stores nothing and contacts nobody.</string>
+    <string name="welcome_manual">Enter server details manually</string>
+    <string name="welcome_manual_hint">For a shared Pocket Exit server, where an administrator handed you a URL and an agent token.</string>
+
+    <!-- Pairing confirmation sheet. -->
+    <string name="pair_confirm_title">Pair with this server?</string>
+    <string name="pair_confirm_lead">Check that this is your own computer before you continue.</string>
+    <string name="pair_label_server">Server address</string>
+    <string name="pair_label_name">Server name</string>
+    <string name="pair_label_pin">Certificate fingerprint</string>
+    <string name="pair_no_name">Not provided</string>
+    <string name="pair_pin_none">Not pinned. This server must present a certificate your phone already trusts.</string>
+    <string name="pair_pin_full">Full fingerprint %1$s</string>
+    <string name="pair_consent">Confirming sends this phone\'s name, %1$s, to %2$s. Nothing is written to this phone until that server answers.</string>
+    <string name="pair_confirm_action">Pair this phone</string>
+    <string name="pair_working_title">Pairing</string>
+    <string name="pair_working_detail">Asking %1$s for an agent token.</string>
+    <string name="pair_working_description">Pairing in progress</string>
+    <string name="pair_failed_title">Pairing did not finish</string>
+    <string name="pair_failed_hint">Nothing was saved. You can try the same code again while it is still valid.</string>
+    <string name="pair_retry">Try again</string>
+    <string name="pair_link_rejected_title">This link cannot be used</string>
+    <string name="pair_link_unreadable">This is not a usable Pocket Exit link.</string>
+    <string name="pair_link_rejected_hint">Mint a fresh code on the server and scan it again.</string>
+    <string name="pair_import_title">Import this configuration?</string>
+    <string name="pair_import_lead">This link carries an agent token that an administrator minted for you.</string>
+    <string name="pair_import_note">The exit node stays stopped until you start it.</string>
+    <string name="pair_label_node">Node ID</string>
+    <string name="pair_import_action">Import</string>
+
+    <!-- Home. -->
+    <string name="home_eyebrow">POCKET EXIT</string>
+    <string name="home_title">Exit node</string>
+    <string name="home_settings">Settings</string>
+    <string name="home_paired_title">Paired with %1$s</string>
+    <string name="home_paired_detail">Nothing is running yet. Start the exit node when you want your computer\'s traffic to leave through this phone.</string>
+    <string name="home_paired_dismiss">Got it</string>
+    <string name="home_reconnect">Reconnect now</string>
+    <string name="home_network_settings">Open network settings</string>
+    <string name="home_open_settings">Open settings</string>
+    <string name="home_start">Start exit node</string>
+    <string name="home_stop">Stop exit node</string>
+    <string name="home_last_error">Last error: %1$s</string>
+
+    <string name="state_stopped_title">Stopped</string>
+    <string name="state_stopped_detail">This phone is not carrying any traffic.</string>
+    <string name="state_connecting_title">Connecting</string>
+    <string name="state_connecting_detail">Reaching %1$s and registering this phone.</string>
+    <string name="state_online_title">Online</string>
+    <string name="state_online_detail">Traffic from your computer is leaving through this phone.</string>
+    <string name="state_degraded_title">Server not answering</string>
+    <string name="state_degraded_detail">The exit node is running but your server has not answered recently. Check that the computer is awake and on the same network as this phone.</string>
+    <string name="state_no_network_title">No usable network</string>
+    <string name="state_no_network_detail">Neither Wi-Fi nor mobile data is validated right now, so there is nothing to relay through.</string>
+
+    <!-- Live traffic. -->
+    <string name="traffic_title">LIVE TRAFFIC</string>
+    <string name="traffic_total">%1$s total</string>
+    <string name="traffic_down">Down</string>
+    <string name="traffic_up">Up</string>
+    <string name="traffic_window_start">36 seconds ago</string>
+    <string name="traffic_window_end">Now</string>
+    <string name="traffic_chart_description">Traffic over the last 36 seconds. Downloading %1$s, uploading %2$s.</string>
+
+    <!-- Exit path. -->
+    <string name="exit_path_title">Exit path</string>
+    <string name="exit_path_none">No network is carrying the exit</string>
+    <string name="exit_path_metered">Metered — your data plan pays for this traffic</string>
+    <string name="exit_path_unmetered">Unmetered</string>
+    <string name="exit_path_interface">Interface %1$s</string>
+    <string name="exit_path_downlink">%1$s downlink</string>
+    <string name="exit_path_control">Control channel</string>
+    <string name="exit_path_policy">Exit policy</string>
+
+    <!-- Session detail. -->
+    <string name="details_title">Session</string>
+    <string name="details_protocol">Protocol</string>
+    <string name="details_circuits">Open circuits</string>
+    <string name="details_node">Node ID</string>
+    <string name="details_server">Server</string>
+    <string name="details_trust">Server trust</string>
+    <string name="details_trust_pinned">Pinned %1$s</string>
+    <string name="details_trust_platform">Platform certificate store</string>
+    <string name="details_heartbeat">Last heartbeat</string>
+    <string name="details_heartbeat_never">None yet</string>
+    <string name="value_none">—</string>
+
+    <!-- Settings. -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_back">Back</string>
+    <string name="settings_manual_title">Manual setup</string>
+    <string name="settings_manual_lead">Use this when an administrator gave you a server URL and an agent token. A personal-mode server pairs by scanning its code instead.</string>
+    <string name="settings_section_server">Server</string>
+    <string name="settings_server_url">Server URL</string>
+    <string name="settings_node_id">Node ID</string>
+    <string name="settings_device_name">Device name</string>
+    <string name="settings_agent_token">Agent token</string>
+    <string name="settings_secret_note">The agent token is encrypted by the Android keystore. The certificate fingerprint is a public hash and is set by pairing.</string>
+    <string name="settings_token_show">Show</string>
+    <string name="settings_token_hide">Hide</string>
+    <string name="settings_pin_label">Certificate pin</string>
+    <string name="settings_pin_platform">Platform certificate store</string>
+    <string name="settings_section_routing">Routing</string>
+    <string name="settings_control_policy">Control channel</string>
+    <string name="settings_exit_policy">Exit traffic</string>
+    <string name="settings_policy_menu">%1$s, currently %2$s</string>
+    <string name="settings_section_startup">Startup</string>
+    <string name="settings_auto_start">Start after reboot</string>
+    <string name="settings_auto_start_detail">Only when the exit node was running when the phone shut down.</string>
+    <string name="settings_save">Save</string>
+    <string name="settings_save_restart">Save and reconnect</string>
+    <string name="settings_saved">Settings saved</string>
+    <string name="settings_saved_restart">Saved · reconnecting</string>
+    <string name="settings_section_pairing">Pairing</string>
+    <string name="settings_unpair">Unpair this phone</string>
+    <string name="settings_unpair_detail">Forgets the agent token and the pinned certificate. You can pair again at any time.</string>
+    <string name="settings_unpair_confirm_title">Unpair this phone?</string>
+    <string name="settings_unpair_confirm_detail">The exit node stops and the stored token is deleted. To use it again, scan a fresh code from your server.</string>
+    <string name="settings_unpaired">Unpaired · scan a fresh code to pair again</string>
+
+    <!-- Shared actions and transient messages. -->
+    <string name="action_cancel">Cancel</string>
+    <string name="action_close">Close</string>
+    <string name="message_starting">Starting the exit node</string>
+    <string name="message_stopping">Stopping the exit node</string>
+    <string name="message_reconnecting">Reconnecting</string>
+    <string name="message_no_network_settings">This phone has no network settings screen</string>
 </resources>
