@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -189,8 +190,8 @@ func Personal(options PersonalOptions) (Config, error) {
 	if err := validateServerURL(cfg.ServerURL); err != nil {
 		return Config{}, fmt.Errorf("invalid server URL %q: %w", cfg.ServerURL, err)
 	}
-	if len(cfg.ServerName) > maxServerNameLength {
-		return Config{}, fmt.Errorf("server name must contain at most %d bytes", maxServerNameLength)
+	if utf8.RuneCountInString(cfg.ServerName) > maxServerNameLength {
+		return Config{}, fmt.Errorf("server name must contain at most %d characters", maxServerNameLength)
 	}
 	if strings.ContainsRune(cfg.FrontendDir, '\x00') {
 		return Config{}, fmt.Errorf("frontend directory must not contain a null byte")

@@ -291,12 +291,18 @@ func loopbackAddress(address string) bool {
 	return strings.EqualFold(host, "localhost")
 }
 
+// maxServerNameRunes mirrors the contract's 64-character ceiling on the
+// onboarding URI's display label. Counted in runes, matching config.
+const maxServerNameRunes = 64
+
 // truncateServerName keeps the onboarding URI's display label within the
-// contract's 64-byte ceiling.
+// contract's 64-character ceiling. It counts runes rather than bytes, so a
+// multi-byte character is never cut in half into invalid UTF-8.
 func truncateServerName(name string) string {
 	name = strings.TrimSpace(name)
-	if len(name) <= 64 {
+	runes := []rune(name)
+	if len(runes) <= maxServerNameRunes {
 		return name
 	}
-	return name[:64]
+	return strings.TrimSpace(string(runes[:maxServerNameRunes]))
 }
