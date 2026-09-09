@@ -18,6 +18,7 @@ import (
 	"github.com/CesarPetrescu/pocket-exit/backend/internal/config"
 	"github.com/CesarPetrescu/pocket-exit/backend/internal/model"
 	"github.com/CesarPetrescu/pocket-exit/backend/internal/nodes"
+	"github.com/CesarPetrescu/pocket-exit/backend/internal/personal"
 	"github.com/coder/websocket"
 	"github.com/skip2/go-qrcode"
 )
@@ -29,10 +30,25 @@ type Server struct {
 	nodes    *nodes.Registry
 	circuits *circuit.Manager
 	logger   *slog.Logger
+	tokens   personal.TokenStore
+	pairing  *personal.Pairing
 }
 
 func New(config config.Config, nodes *nodes.Registry, circuits *circuit.Manager, logger *slog.Logger) *Server {
-	return &Server{config: config, nodes: nodes, circuits: circuits, logger: logger}
+	return &Server{
+		config:   config,
+		nodes:    nodes,
+		circuits: circuits,
+		logger:   logger,
+		tokens:   personal.NewStaticTokenStore(config.AgentTokens),
+		pairing:  personal.NewPairing(),
+	}
+}
+
+// NewPersonal builds a server whose agent tokens are minted by pairing and kept
+// in the state directory rather than read from AGENT_TOKENS_JSON.
+func NewPersonal(config config.Config, nodes *nodes.Registry, circuits *circuit.Manager, logger *slog.Logger, tokens personal.TokenStore, pairing *personal.Pairing) *Server {
+	return &Server{config: config, nodes: nodes, circuits: circuits, logger: logger, tokens: tokens, pairing: pairing}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -40,6 +56,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/health", s.health)
 	mux.HandleFunc("GET /api/v1/nodes", s.admin(s.listNodes))
 	mux.HandleFunc("PATCH /api/v1/nodes/{nodeID}", s.admin(s.updateNode))
+	mux.HandleFunc("DELETE /api/v1/nodes/{nodeID}", s.admin(s.deleteNode))
 	mux.HandleFunc("GET /api/v1/nodes/{nodeID}/onboarding", s.admin(s.onboarding))
 	mux.HandleFunc("GET /api/v1/circuits", s.admin(s.listCircuits))
 	mux.HandleFunc("DELETE /api/v1/circuits/{circuitID}", s.admin(s.closeCircuit))
@@ -51,6 +68,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /agent/v1/circuits/{circuitID}/ws", s.circuitWebSocket)
 	mux.HandleFunc("GET /agent/v1/circuits/{circuitID}/down", s.circuitDown)
 	mux.HandleFunc("POST /agent/v1/circuits/{circuitID}/up", s.circuitUp)
+
+	if s.config.Mode == config.ModePersonal {
+		// Personal mode has no nginx in front of it, so this process owns the
+		// pairing endpoints and the dashboard as well as the API.
+		mux.HandleFunc("POST /pair/v1/claim", s.claim)
+		mux.HandleFunc("GET /api/v1/pairing", s.admin(s.pairingStatus))
+		mux.HandleFunc("POST /api/v1/pairing", s.admin(s.mintPairingCode))
+		mux.HandleFunc("DELETE /api/v1/pairing", s.admin(s.cancelPairingCode))
+		if s.config.FrontendDir != "" {
+			mux.Handle("GET /", s.staticFiles(s.config.FrontendDir))
+		}
+	}
 
 	return s.recoverPanic(s.requestLog(s.securityHeaders(mux)))
 }
@@ -263,18 +292,30 @@ func (s *Server) listNodes(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) onboarding(w http.ResponseWriter, r *http.Request) {
 	nodeID := r.PathValue("nodeID")
-	token, ok := s.config.AgentTokens[nodeID]
+	token, ok := s.tokens.Lookup(nodeID)
 	if !ok {
 		writeError(w, http.StatusNotFound, "node is not configured")
 		return
 	}
-	query := url.Values{
-		"v":      {"1"},
-		"server": {"https://" + s.config.PublicProxyHost},
-		"node":   {nodeID},
-		"token":  {token},
+	var onboardingURI string
+	if s.config.Mode == config.ModePersonal {
+		// Version 2 carries no token: the phone claims one with a live pairing
+		// code, so re-onboarding a paired node needs a code to be active.
+		pairingCode, active := s.pairing.Active()
+		if !active {
+			writeError(w, http.StatusConflict, "mint a pairing code with POST /api/v1/pairing first")
+			return
+		}
+		onboardingURI = s.PairingURI(pairingCode.Code)
+	} else {
+		query := url.Values{
+			"v":      {"1"},
+			"server": {s.config.ServerOrigin()},
+			"node":   {nodeID},
+			"token":  {token},
+		}
+		onboardingURI = (&url.URL{Scheme: "pocketexit", Host: "configure", RawQuery: query.Encode()}).String()
 	}
-	onboardingURI := (&url.URL{Scheme: "pocketexit", Host: "configure", RawQuery: query.Encode()}).String()
 	code, err := qrcode.New(onboardingURI, qrcode.Medium)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not generate onboarding QR")
@@ -330,6 +371,35 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, node)
 }
 
+// deleteNode unpairs a phone: its token is revoked, it is disabled so the
+// scheduler stops choosing it, and its circuits are torn down. Server-mode
+// nodes come from AGENT_TOKENS_JSON and cannot be revoked at runtime.
+func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.PathValue("nodeID")
+	if err := s.tokens.Revoke(nodeID); err != nil {
+		switch {
+		case errors.Is(err, personal.ErrTokensImmutable):
+			writeError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, personal.ErrNodeNotFound):
+			writeError(w, http.StatusNotFound, "node is not paired")
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	disabled := false
+	if _, err := s.nodes.Update(nodeID, &disabled, nil, nil); err != nil && !errors.Is(err, nodes.ErrNodeNotFound) {
+		s.logger.Warn("could not disable unpaired node", "node_id", nodeID, "error", err)
+	}
+	for _, view := range s.circuits.List() {
+		if view.NodeID == nodeID {
+			_ = s.circuits.Close(view.ID, fmt.Errorf("node %s was unpaired", nodeID))
+		}
+	}
+	s.logger.Info("node unpaired", "event", "node_unpaired", "node_id", nodeID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) listCircuits(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"circuits": s.circuits.List()})
 }
@@ -372,7 +442,8 @@ func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) authenticateAgent(r *http.Request, nodeID string) bool {
-	authenticated := s.nodes.Authenticate(nodeID, bearerToken(r), s.config.AgentTokens)
+	expected, ok := s.tokens.Lookup(nodeID)
+	authenticated := ok && secureEqual(expected, bearerToken(r))
 	if !authenticated {
 		s.logger.Warn("agent authentication failed", "event", "agent_auth_failed", "node_id", nodeID)
 	}

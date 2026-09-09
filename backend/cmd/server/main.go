@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,7 +19,47 @@ import (
 	"github.com/CesarPetrescu/pocket-exit/backend/internal/proxy"
 )
 
+const version = "0.4.1"
+
 func main() {
+	arguments := os.Args[1:]
+	if len(arguments) == 0 {
+		// A bare invocation is the deployed server, configured entirely by the
+		// environment, exactly as it has always been.
+		runServer()
+		return
+	}
+	switch arguments[0] {
+	case "personal":
+		if err := runPersonal(arguments[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "pocketexit personal:", err)
+			os.Exit(1)
+		}
+	case "version", "--version":
+		fmt.Println("pocketexit " + version)
+	case "help", "-h", "--help":
+		usage(os.Stdout)
+	default:
+		fmt.Fprintf(os.Stderr, "pocketexit: unknown command %q\n\n", arguments[0])
+		usage(os.Stderr)
+		os.Exit(2)
+	}
+}
+
+func usage(out io.Writer) {
+	fmt.Fprint(out, `PocketExit turns Android phones into selectable Internet exit nodes.
+
+Usage:
+  pocketexit             Run the deployed server, configured by environment variables.
+  pocketexit personal    Run zero-server personal mode on this machine.
+  pocketexit version     Print the version.
+  pocketexit help        Print this message.
+
+Run "pocketexit personal --help" for the personal-mode flags.
+`)
+}
+
+func runServer() {
 	cfg, err := config.Load()
 	if err != nil {
 		panic(err)
