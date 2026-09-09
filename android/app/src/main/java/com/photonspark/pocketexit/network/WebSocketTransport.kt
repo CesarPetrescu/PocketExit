@@ -17,7 +17,10 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 
-class WebSocketTransport(private val serverUrl: String) : Closeable {
+class WebSocketTransport(
+    private val serverUrl: String,
+    private val pin: String = "",
+) : Closeable {
     class Session internal constructor(
         private val socket: WebSocket,
         private val channel: Channel<ByteArray>,
@@ -105,14 +108,19 @@ class WebSocketTransport(private val serverUrl: String) : Closeable {
         clients.clear()
     }
 
+    // The pin composes with the per-network binding rather than replacing it:
+    // socketFactory still opens the socket on the chosen Network and the pinned
+    // SSLSocketFactory wraps it.
     private fun client(network: Network): OkHttpClient = clients.computeIfAbsent(network.networkHandle) {
-        OkHttpClient.Builder()
-            .socketFactory(network.socketFactory)
-            .dns { hostname -> network.getAllByName(hostname).toList() }
-            .pingInterval(20, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.MILLISECONDS)
-            .retryOnConnectionFailure(true)
-            .build()
+        PinnedTrust.applyPin(
+            OkHttpClient.Builder()
+                .socketFactory(network.socketFactory)
+                .dns { hostname -> network.getAllByName(hostname).toList() }
+                .pingInterval(20, TimeUnit.SECONDS)
+                .readTimeout(0, TimeUnit.MILLISECONDS)
+                .retryOnConnectionFailure(true),
+            pin,
+        ).build()
     }
 
     companion object {

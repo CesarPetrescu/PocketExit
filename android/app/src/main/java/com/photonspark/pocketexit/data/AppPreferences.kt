@@ -35,6 +35,9 @@ class AppPreferences(context: Context) : SharedPreferences.OnSharedPreferenceCha
         val normalizedNodeId = sanitizeNodeId(config.nodeId)
         preferences.edit()
             .putString(KEY_SERVER_URL, config.normalizedServerUrl)
+            // The pin is a public hash, not a secret, so it lives beside the
+            // server URL rather than in the Keystore-backed secret store.
+            .putString(KEY_PIN, config.pin.trim())
             .putString(KEY_NODE_ID, normalizedNodeId)
             .putString(KEY_DEVICE_NAME, config.deviceName.trim().ifBlank { Build.MODEL })
             .putString(KEY_CONTROL_POLICY, config.controlPolicy.wire)
@@ -85,6 +88,7 @@ class AppPreferences(context: Context) : SharedPreferences.OnSharedPreferenceCha
         ),
         enabled = preferences.getBoolean(KEY_ENABLED, false),
         autoStart = preferences.getBoolean(KEY_AUTO_START, false),
+        pin = preferences.getString(KEY_PIN, "").orEmpty(),
     )
 
     private fun ensureDefaults() {
@@ -115,6 +119,7 @@ class AppPreferences(context: Context) : SharedPreferences.OnSharedPreferenceCha
         private const val FILE_NAME = "pocket_exit"
         private const val DEFAULT_SERVER_URL = "https://proxy.example.com"
         private const val KEY_SERVER_URL = "server_url"
+        private const val KEY_PIN = "server_pin"
         private const val KEY_NODE_ID = "node_id"
         private const val KEY_DEVICE_NAME = "device_name"
         private const val KEY_CONTROL_POLICY = "control_policy"
