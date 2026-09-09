@@ -293,7 +293,7 @@ main { padding: 2rem 0 4rem; }
 .node-card { border-radius: 1rem; overflow: hidden; }
 .node-card.disabled { opacity: .68; }
 .node-header { display: flex; justify-content: space-between; gap: 1rem; padding: 1.05rem; border-bottom: 1px solid var(--border); }
-.node-actions { display: flex; align-items: center; gap: .65rem; }
+.node-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; }
 .pair-button { min-height: 36px; padding: .4rem .65rem; font-size: .7rem; }
 .node-title { display: flex; align-items: center; gap: .65rem; }
 .node-title h3 { font-size: 1.05rem; }
