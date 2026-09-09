@@ -68,7 +68,13 @@ func runServer() {
 	if err != nil {
 		panic(err)
 	}
-	defer auditFile.Close()
+	// A write buffered inside the file can still fail at Close. Losing it
+	// silently defeats the point of an audit log, so the failure is reported.
+	defer func() {
+		if err := auditFile.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "pocketexit: closing the audit log failed:", err)
+		}
+	}()
 	registry := nodes.NewRegistry(cfg.NodeOfflineAfter, cfg.MaxCircuitsPerNode)
 	circuits := circuit.NewManager()
 	api := httpapi.New(cfg, registry, circuits, logger)

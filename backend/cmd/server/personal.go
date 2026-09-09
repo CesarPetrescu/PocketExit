@@ -112,7 +112,13 @@ func runPersonal(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	defer auditFile.Close()
+	// As in runServer: a deferred Close that drops its error can lose the
+	// last audit records without anyone noticing.
+	defer func() {
+		if closeErr := auditFile.Close(); closeErr != nil {
+			logger.Error("closing the audit log failed", "error", closeErr)
+		}
+	}()
 	registry := nodes.NewRegistry(cfg.NodeOfflineAfter, cfg.MaxCircuitsPerNode)
 	circuits := circuit.NewManager()
 	pairing := personal.NewPairing()
