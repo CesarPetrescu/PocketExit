@@ -1,0 +1,85 @@
+version: 2
+
+updates:
+  # The Go module. Direct dependencies are two small libraries, so they are
+  # raised individually; everything indirect is grouped to keep the noise down.
+  - package-ecosystem: gomod
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    groups:
+      go-indirect:
+        patterns: ["*"]
+        update-types: ["patch"]
+    commit-message:
+      prefix: "backend"
+
+  - package-ecosystem: gradle
+    directory: /android
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    groups:
+      androidx:
+        patterns:
+          - "androidx.*"
+          - "org.jetbrains.kotlin*"
+    commit-message:
+      prefix: "android"
+
+  # One entry per Dockerfile: base images are pinned by digest, so these are
+  # the pull requests that move them.
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    commit-message:
+      prefix: "backend"
+
+  - package-ecosystem: docker
+    directory: /nginx
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    commit-message:
+      prefix: "nginx"
+
+  - package-ecosystem: docker
+    directory: /android
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    commit-message:
+      prefix: "android"
+
+  - package-ecosystem: docker
+    directory: /spark-tunnel
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    commit-message:
+      prefix: "spark-tunnel"
+
+  # Every action is pinned to a commit SHA, which only Dependabot can move for
+  # us. They are grouped so one pull request updates the whole set.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"

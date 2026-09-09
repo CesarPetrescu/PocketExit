@@ -1,0 +1,19 @@
+# hadolint rules for the four Dockerfiles.
+#
+# The threshold is "error" rather than the default "info" because the images
+# carry pre-existing warnings that are deliberate: the Alpine and Debian
+# packages are intentionally unpinned so a rebuild picks up security updates,
+# and the nginx image probes its own build flags through a pipe. Those show up
+# in the job summary; only genuine errors stop the build.
+failure-threshold: error
+
+trustedRegistries:
+  - docker.io
+  - ghcr.io
+
+ignored:
+  # DL3018/DL3008: apk and apt package versions are left unpinned on purpose,
+  # so rebuilding an image picks up upstream security updates. The base images
+  # themselves are pinned, which is where reproducibility actually comes from.
+  - DL3018
+  - DL3008

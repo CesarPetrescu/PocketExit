@@ -5,16 +5,53 @@ on:
     tags:
       - "v*"
 
+# Read-only by default. The two jobs that publish widen it themselves.
 permissions:
-  contents: write
-  packages: write
+  contents: read
+
+# A tag is built once. Two pushes of the same tag must not race each other to
+# the same release and the same GHCR tags.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  apk:
+  # The tag has to agree with the version in the app before anything is built,
+  # signed or pushed, and the backend has to pass its own tests.
+  verify:
+    name: Verify the tag
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
-      - name: Validate signing secrets
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: backend/go.mod
+          # No module cache on a publishing workflow: a cache entry poisoned
+          # by an earlier run must not be able to reach a signed artefact.
+          cache: false
+      - name: The tag matches the app version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION=${TAG#v}
+          grep -Fq "versionName = \"$VERSION\"" android/app/build.gradle.kts
+      - name: Backend tests
+        working-directory: backend
+        run: go test -race ./...
+
+  apk:
+    name: Signed APK
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Stage the signing key
         env:
           KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -25,52 +62,84 @@ jobs:
           test -n "$STORE_PASSWORD"
           test -n "$KEY_ALIAS"
           test -n "$KEY_PASSWORD"
-          printf '%s' "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/pocketexit-release.jks"
-          chmod 600 "$RUNNER_TEMP/pocketexit-release.jks"
-      - name: Build signed APK in the pinned toolchain
+          # The key goes in its own directory rather than loose in RUNNER_TEMP,
+          # so only that directory is mounted into the build container and the
+          # cleanup step below has one thing to remove.
+          umask 077
+          mkdir -p "$RUNNER_TEMP/signing"
+          chmod 700 "$RUNNER_TEMP/signing"
+          printf '%s' "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/signing/pocketexit-release.jks"
+          chmod 600 "$RUNNER_TEMP/signing/pocketexit-release.jks"
+          test -s "$RUNNER_TEMP/signing/pocketexit-release.jks"
+      - name: Build the signed APK in the pinned toolchain
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          TAG: ${{ github.ref_name }}
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          grep -Fq "versionName = \"$VERSION\"" android/app/build.gradle.kts
           docker build -t pocketexit-android-builder android
           docker run --rm --user "$(id -u):$(id -g)" \
             -e HOME=/tmp -e GRADLE_USER_HOME=/tmp/gradle \
             -e ANDROID_KEYSTORE_FILE=/signing/pocketexit-release.jks \
             -e ANDROID_KEYSTORE_PASSWORD -e ANDROID_KEY_ALIAS -e ANDROID_KEY_PASSWORD \
-            -v "$PWD/android:/workspace" -v "$RUNNER_TEMP:/signing:ro" \
+            -v "$PWD/android:/workspace" -v "$RUNNER_TEMP/signing:/signing:ro" \
             pocketexit-android-builder testDebugUnitTest lintRelease assembleRelease
-          cp android/app/build/outputs/apk/release/app-release.apk PocketExit-${GITHUB_REF_NAME}.apk
-          sha256sum PocketExit-${GITHUB_REF_NAME}.apk > SHA256SUMS
-      - name: Verify APK signature
+          cp android/app/build/outputs/apk/release/app-release.apk "PocketExit-$TAG.apk"
+          sha256sum "PocketExit-$TAG.apk" > SHA256SUMS
+      - name: Verify the APK signature
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           docker run --rm --entrypoint apksigner \
             -v "$PWD:/artifacts:ro" pocketexit-android-builder \
-            verify --verbose "/artifacts/PocketExit-${GITHUB_REF_NAME}.apk"
-      - name: Publish GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "PocketExit-${GITHUB_REF_NAME}.apk" SHA256SUMS --generate-notes --verify-tag
+            verify --verbose "/artifacts/PocketExit-$TAG.apk"
+      - name: Remove the signing key
+        # Runs even when the build fails, so the decoded keystore never
+        # outlives the step that needed it.
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/signing"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-apk
+          path: |
+            PocketExit-*.apk
+            SHA256SUMS
+          if-no-files-found: error
 
   images:
+    name: Container images
+    needs: verify
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      # linux/arm64 is cross-built on an amd64 runner, which needs binfmt
+      # handlers and a buildx builder that can drive more than one platform.
+      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Log in to GHCR
         env:
           GH_TOKEN: ${{ github.token }}
         run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - name: Publish multi-architecture images with provenance and SBOMs
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           REPOSITORY=${GITHUB_REPOSITORY,,}
-          VERSION=${GITHUB_REF_NAME#v}
-          docker buildx create --use
+          VERSION=${TAG#v}
           for IMAGE in backend nginx; do
             case "$IMAGE" in
               backend) CONTEXT=backend; FILE=backend/Dockerfile ;;
               nginx) CONTEXT=.; FILE=nginx/Dockerfile ;;
+              *) echo "unknown image $IMAGE" >&2; exit 1 ;;
             esac
             docker buildx build --platform linux/amd64,linux/arm64 --push \
               --provenance=true --sbom=true \
@@ -85,3 +154,28 @@ jobs:
             -t "ghcr.io/$REPOSITORY/android-builder:$VERSION" \
             -t "ghcr.io/$REPOSITORY/android-builder:latest" \
             android
+
+  # The release is published last, so a tag never ends up with a GitHub release
+  # pointing at images that failed to push.
+  publish:
+    name: Publish the release
+    needs: [apk, images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-apk
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          sha256sum -c SHA256SUMS
+          gh release create "$TAG" "PocketExit-$TAG.apk" SHA256SUMS \
+            --generate-notes --verify-tag

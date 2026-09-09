@@ -1,0 +1,114 @@
+# Linters for the PocketExit backend. The point is to catch the mistakes this
+# codebase can actually make - an unchecked error on a proxy hot path, a leaked
+# response body, a request built without a context, a wrapped error compared by
+# type - not to impose a house style on code that already has one. Checks that
+# would only argue with the existing idiom (value receivers on Config, if/else
+# chains, De Morgan rewrites) are off on purpose.
+#
+# It runs from the repository root against ./backend/..., so paths in the
+# exclusions below are repository-relative.
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard
+  enable:
+    # Every circuit, heartbeat and pairing claim goes through net/http, so an
+    # unclosed response body is a real leak here rather than a theoretical one.
+    - bodyclose
+    # The code wraps with %w and compares with errors.Is; this keeps new code
+    # from reintroducing type assertions on wrapped errors.
+    - errorlint
+    # An outbound request without a context cannot be cancelled, and both the
+    # agent long-poll and the SOCKS open path depend on cancellation.
+    - noctx
+    - gocritic
+    - misspell
+    - unconvert
+    - usestdlibvars
+    - wastedassign
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      # The codebase writes "_ = connection.Close()" where a close error cannot
+      # be acted on, which is an explicit decision rather than an oversight.
+      check-blank: false
+    gocritic:
+      # Diagnostics only. The performance tag is all hugeParam/rangeValCopy on
+      # config.Config and model.Node, which are passed by value deliberately.
+      enabled-tags:
+        - diagnostic
+      disabled-checks:
+        # Conditions here are not a single value, so if/else reads better than
+        # a switch.
+        - ifElseChain
+        # The QR renderer builds SVG by hand, where %q's Go escaping would
+        # produce the wrong markup.
+        - sprintfQuotedString
+    govet:
+      enable:
+        - nilness
+      # "shadow" is not enabled: the codebase shadows err inside short if
+      # statements throughout, which is idiomatic Go and not a defect.
+    staticcheck:
+      checks:
+        - all
+        # golangci-lint's own defaults: package/receiver/error-string naming is
+        # already consistent here and does not need policing.
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        # De Morgan rewrites of the policy predicates make them harder to read.
+        - -QF1001
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      # Tests build requests against httptest servers and close everything
+      # through defer or t.Cleanup; the ceremony these want adds noise, not
+      # safety.
+      - path: _test\.go
+        linters:
+          - bodyclose
+          - errcheck
+          - noctx
+
+      # Listeners are opened once at startup and closed when the context is
+      # cancelled, so a ListenConfig would add a parameter and change nothing.
+      - linters:
+          - noctx
+        text: 'net\.(Listen|ListenPacket) must not be called'
+
+      # Teardown closers on the circuit path. Their error has nowhere to go:
+      # the circuit is already being torn down and the caller has returned.
+      - linters:
+          - errcheck
+        text: 'Error return value of `(connection\.CloseNow|c\.CloseUp)` is not checked'
+
+      # Pre-existing, both on the same line: the SOCKS accept loop type-asserts
+      # to net.Error and calls the deprecated Temporary() to spot a transient
+      # accept failure. Accept never returns a wrapped error, so it is safe
+      # today; it should become errors.As plus an explicit timeout check when
+      # that code is next touched.
+      - path: internal/proxy/socks\.go
+        linters:
+          - errorlint
+        text: 'type assertion on error will fail on wrapped errors'
+      - path: internal/proxy/socks\.go
+        linters:
+          - staticcheck
+        text: 'SA1019: temporary\.Temporary has been deprecated'
+
+formatters:
+  enable:
+    - gofmt
