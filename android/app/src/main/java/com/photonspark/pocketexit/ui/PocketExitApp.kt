@@ -81,7 +81,8 @@ internal fun PocketExitApp(
     val link = parsed?.getOrNull()
     val flow: PairingFlow = when {
         parsed == null -> PairingFlow.Idle
-        link == null -> PairingFlow.Rejected(parsed?.exceptionOrNull()?.message ?: unreadable)
+        // parsed is non-null here: the branch above returned when it was not.
+        link == null -> PairingFlow.Rejected(parsed.exceptionOrNull()?.message ?: unreadable)
         link is OnboardingLink.Configured -> PairingFlow.Import(link.config)
         link is OnboardingLink.Pairing && claiming -> PairingFlow.Working(link)
         link is OnboardingLink.Pairing && failure.isNotEmpty() -> PairingFlow.Failed(link, failure)
