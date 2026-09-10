@@ -17,7 +17,7 @@ import zipfile
 
 root = pathlib.Path(sys.argv[1]).resolve()
 out = pathlib.Path(sys.argv[2]).resolve()
-excluded_parts = {".git", ".gradle", ".idea", "build", "__pycache__"}
+excluded_parts = {".git", ".gradle", ".gradle-home", ".idea", "build", "__pycache__"}
 excluded_files = {
     ".env", "server", "pocketexit", "coverage.out", "gradle-wrapper.jar",
     "ca.crt", "ca.key", "server.crt", "server.key", "ca.srl",

@@ -79,6 +79,20 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Robolectric runs the Compose tests on the JVM against the merged
+        // debug resources and manifest, so the screens are exercised by the
+        // same `testDebugUnitTest` CI already runs — no emulator, no device.
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            // Robolectric fetches an Android runtime on first use and caches it
+            // under the test JVM's user.home. The JVM reads that from the passwd
+            // entry, not from $HOME, and the CI toolchain container runs as a uid
+            // that has none — user.home comes out as "?" and the fetch dies on a
+            // path that cannot exist. Anchoring it to the Gradle home keeps the
+            // tests runnable however the container is invoked, and puts the
+            // runtime somewhere CI already caches.
+            it.systemProperty("user.home", gradle.gradleUserHomeDir.absolutePath)
+        }
     }
 }
 
@@ -90,7 +104,7 @@ dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
 
     implementation(composeBom)
-    androidTestImplementation(composeBom)
+    testImplementation(composeBom)
 
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.activity:activity-compose:1.13.0")
@@ -109,4 +123,7 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.test.ext:junit:1.3.0")
+    testImplementation("org.robolectric:robolectric:4.16.1")
 }

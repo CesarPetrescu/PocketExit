@@ -10,7 +10,7 @@ export default [
     files: ["frontend/**/*.js"],
     languageOptions: {
       ecmaVersion: 2023,
-      sourceType: "script",
+      sourceType: "module",
       globals: {
         console: "readonly",
         document: "readonly",
