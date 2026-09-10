@@ -83,6 +83,16 @@ android {
         // debug resources and manifest, so the screens are exercised by the
         // same `testDebugUnitTest` CI already runs — no emulator, no device.
         unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            // Robolectric fetches an Android runtime on first use and caches it
+            // under the test JVM's user.home. The JVM reads that from the passwd
+            // entry, not from $HOME, and the CI toolchain container runs as a uid
+            // that has none — user.home comes out as "?" and the fetch dies on a
+            // path that cannot exist. Anchoring it to the Gradle home keeps the
+            // tests runnable however the container is invoked, and puts the
+            // runtime somewhere CI already caches.
+            it.systemProperty("user.home", gradle.gradleUserHomeDir.absolutePath)
+        }
     }
 }
 
