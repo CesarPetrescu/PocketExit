@@ -18,6 +18,9 @@ nginx/certs/*
 !nginx/certs/.gitkeep
 
 android/.gradle/
+# The Android CI job mounts this into the toolchain container as the Gradle
+# home so the cache survives between runs.
+.gradle-home/
 android/local.properties
 android/gradle/wrapper/gradle-wrapper.jar
 android/app/build/

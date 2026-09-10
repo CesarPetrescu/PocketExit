@@ -31,15 +31,13 @@ android-apk:
 		-v "$(CURDIR)/android:/workspace" pocketexit-android-builder
 	@echo "APK: android/app/build/outputs/apk/debug/app-debug.apk"
 
+# The system test owns the stack: it brings it up, validates the gateway
+# configuration, drives real SOCKS5 and agent traffic through nginx, and tears
+# it down again. It needs a .env, which scripts/setup.sh writes.
 test-docker:
 	docker compose config >/dev/null
 	docker compose build
-	docker compose up -d
-	@i=0; until curl -kfsS https://127.0.0.1/api/v1/health >/dev/null; do \
-		i=$$((i+1)); [ $$i -lt 30 ] || { docker compose logs; exit 1; }; sleep 1; \
-	done
-	docker compose exec -T nginx nginx -t
-	docker compose down -v
+	python3 .github/e2e/system-test.py
 
 test-live:
 	./scripts/live-phone-tests.sh

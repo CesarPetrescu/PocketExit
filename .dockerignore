@@ -1,0 +1,8 @@
+# The gateway image is built from the repository root, so everything here is
+# sent to the daemon before the first COPY runs. nginx/Dockerfile only copies
+# nginx/nginx.conf and frontend/, so the rest is cost at best and, in the case
+# of the development keys, something that must never reach a build context.
+.git
+.gradle-home
+nginx/certs
+frontend/*.test.js

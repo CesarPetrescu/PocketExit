@@ -79,6 +79,10 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Robolectric runs the Compose tests on the JVM against the merged
+        // debug resources and manifest, so the screens are exercised by the
+        // same `testDebugUnitTest` CI already runs — no emulator, no device.
+        unitTests.isIncludeAndroidResources = true
     }
 }
 
@@ -90,7 +94,7 @@ dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
 
     implementation(composeBom)
-    androidTestImplementation(composeBom)
+    testImplementation(composeBom)
 
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.activity:activity-compose:1.13.0")
@@ -109,4 +113,7 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.test.ext:junit:1.3.0")
+    testImplementation("org.robolectric:robolectric:4.16.1")
 }

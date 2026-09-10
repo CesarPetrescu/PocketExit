@@ -23,8 +23,11 @@ printf '%s\n' '== Personal-mode process smoke test =='
 printf '%s\n' '== SOCKS5 end-to-end =='
 python3 "$ROOT/.github/e2e/socks-e2e.py"
 
-printf '%s\n' '== Frontend syntax =='
-node --check "$ROOT/frontend/app.js"
+printf '%s\n' '== Dashboard syntax and tests =='
+for script in "$ROOT"/frontend/*.js; do
+  node --check "$script"
+done
+node --test "$ROOT/frontend/lib.test.js"
 
 printf '%s\n' '== YAML/XML/shell/source checks =='
 python3 "$ROOT/scripts/check-compose.py"
@@ -49,5 +52,12 @@ print("YAML and Android XML parsing passed")
 PY
 find "$ROOT/scripts" -type f -name '*.sh' -exec sh -n {} \;
 sh -n "$ROOT/android/gradlew"
+
+printf '%s\n' '== Gateway system test =='
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && [ -f "$ROOT/.env" ]; then
+  python3 "$ROOT/.github/e2e/system-test.py"
+else
+  printf '%s\n' 'skipped: needs docker and a .env from scripts/setup.sh'
+fi
 
 printf '%s\n' 'Core verification passed.'

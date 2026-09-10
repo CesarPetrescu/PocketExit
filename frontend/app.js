@@ -1,4 +1,15 @@
-"use strict";
+import {
+  formatAge,
+  formatBytes,
+  formatClock,
+  formatRate,
+  prettyPolicy,
+  secondsRemaining,
+  socksEndpoint,
+  statusClass,
+  svgDataURI,
+  trafficSample,
+} from "./lib.js";
 
 const POLICIES = [
   "AUTO",
@@ -13,10 +24,9 @@ const POLICIES = [
 // tab happens to load.
 const PAIRING_TTL_SECONDS = 600;
 
-// Personal mode binds SOCKS to loopback with the username from state.json. The
-// pairing response carries no socks block, so these are the documented defaults
-// used until one is present.
-const DEFAULT_SOCKS = { host: "127.0.0.1", port: 1080, username: "proxy" };
+// How often the dashboard polls. The traffic chart divides each counter delta
+// by this to get a rate, so the two must not drift apart.
+const POLL_SECONDS = 3;
 
 const state = {
   token: sessionStorage.getItem("pocketexit.adminToken") || "",
@@ -182,7 +192,7 @@ function startPolling() {
   clearInterval(state.timer);
   state.timer = setInterval(() => {
     if (state.token && document.visibilityState === "visible") refresh(false);
-  }, 3000);
+  }, POLL_SECONDS * 1000);
 }
 
 async function refresh(showErrors = true) {
@@ -352,38 +362,17 @@ function renderPairing() {
 // is left visible with its state named rather than vanishing under the user.
 function renderCountdown() {
   if (elements.pairing.hidden || !state.pairing || !state.pairing.active) return;
-  const expiry = new Date(state.pairing.expires_at).getTime();
-  if (Number.isNaN(expiry)) {
+  const remaining = secondsRemaining(state.pairing.expires_at);
+  if (remaining === null) {
     elements.pairingCountdown.textContent = "";
     return;
   }
-  const remaining = Math.max(0, Math.round((expiry - Date.now()) / 1000));
   elements.pairingCountdown.textContent = remaining > 0
     ? `Expires in ${formatClock(remaining)}`
     : "This code has expired. Generate a new one.";
   elements.pairingCountdown.className = `pairing-countdown${remaining > 0 ? "" : " expired"}`;
   elements.pairingProgress.max = PAIRING_TTL_SECONDS;
   elements.pairingProgress.value = Math.min(remaining, PAIRING_TTL_SECONDS);
-}
-
-// socksEndpoint prefers a hint from the server and falls back to the
-// personal-mode defaults, which is where the listener sits unless --socks-addr
-// moved it.
-function socksEndpoint(pairing) {
-  const hint = pairing.socks || {};
-  return {
-    host: hint.host || DEFAULT_SOCKS.host,
-    port: hint.port || DEFAULT_SOCKS.port,
-    username: hint.username || DEFAULT_SOCKS.username,
-  };
-}
-
-// svgDataURI wraps the server-rendered QR for an <img>, where an SVG cannot run
-// script. The markup is checked rather than trusted, and it never reaches the
-// document as HTML.
-function svgDataURI(svg) {
-  if (typeof svg !== "string" || !svg.trimStart().startsWith("<svg")) return "";
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
 async function copyValue(button) {
@@ -420,10 +409,7 @@ function renderSummary() {
   const down = state.nodes.reduce((sum, node) => sum + (node.bytes_down || 0), 0);
   const traffic = up + down;
   if (state.previousTraffic) {
-    state.trafficSamples.push({
-      up: Math.max(0, up - state.previousTraffic.up) / 3,
-      down: Math.max(0, down - state.previousTraffic.down) / 3,
-    });
+    state.trafficSamples.push(trafficSample(state.previousTraffic, { up, down }, POLL_SECONDS));
     state.trafficSamples.shift();
   }
   state.previousTraffic = { up, down };
@@ -721,13 +707,6 @@ function statusDot(kind, text) {
   return el("span", `status ${kind}`, text);
 }
 
-function statusClass(status) {
-  if (status === "open") return "online";
-  if (status === "pending") return "warning";
-  if (status === "failed") return "error";
-  return "offline";
-}
-
 function detail(label, value) {
   const row = el("span");
   row.append(document.createTextNode(label));
@@ -763,41 +742,4 @@ function showToast(message, error = false) {
   elements.toast.textContent = message;
   elements.toast.className = `visible${error ? " error" : ""}`;
   toastTimer = setTimeout(() => { elements.toast.className = ""; }, 3200);
-}
-
-function prettyPolicy(policy = "") {
-  return policy.toLowerCase().replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function formatBytes(value = 0) {
-  const bytes = Number(value) || 0;
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KiB", "MiB", "GiB", "TiB"];
-  let current = bytes / 1024;
-  let unit = units[0];
-  for (let index = 1; index < units.length && current >= 1024; index += 1) {
-    current /= 1024;
-    unit = units[index];
-  }
-  return `${current.toFixed(current >= 100 ? 0 : current >= 10 ? 1 : 2)} ${unit}`;
-}
-
-function formatRate(kbps = 0) {
-  if (!kbps) return "—";
-  return kbps >= 1000 ? `${(kbps / 1000).toFixed(0)} Mbps` : `${kbps} Kbps`;
-}
-
-function formatClock(seconds) {
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
-function formatAge(timestamp) {
-  if (!timestamp) return "never";
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(timestamp).getTime()) / 1000));
-  if (seconds < 5) return "now";
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
 }

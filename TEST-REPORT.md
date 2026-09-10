@@ -1,6 +1,6 @@
 # Test report
 
-**Last updated: 2026-09-09.** This file has two halves. The first is current:
+**Last updated: 2026-09-10.** This file has two halves. The first is current:
 what the automated suites check, and what was actually run on that date. The
 second is an archive of a 2026-08-10 hardware session against PocketExit
 v0.3.0, kept because it is the only physical-phone evidence that exists — it is
@@ -19,7 +19,10 @@ count, it comes from a functional check that happened to be timed.
 | Personal-mode pairing smoke test | Yes, every push | `.github/e2e/personal-smoke.sh` |
 | SOCKS5 TCP and UDP end to end | Yes, every push | `.github/e2e/socks-e2e.py` |
 | Android unit tests, lint, debug APK | Yes, every push touching `android/` | CI job *Android* |
-| Compose stack build, startup, `nginx -t` | Yes, every push touching deployment files | CI job *Compose gateway* |
+| Android screens driven and asserted | Yes, every push touching `android/` | CI job *Android* |
+| Dashboard logic | Yes, every push | CI job *Source, YAML and frontend checks* |
+| Compose stack build and image scan | Yes, every push touching deployment files | CI job *Compose gateway* |
+| Real traffic through nginx: SOCKS5 TCP, TLS-wrapped SOCKS5, UDP, agent WebSockets | Yes, every push touching deployment files | `.github/e2e/system-test.py` |
 | Personal mode on a physical phone | **No** | — |
 | Sustained transfer on a physical phone | **No, not since v0.3.0** | see the archive |
 
@@ -156,12 +159,45 @@ SubjectPublicKeyInfo, that the minted token authenticates a heartbeat, that
   present but malformed or empty;
 - pinned trust-manager behaviour.
 
+### Android screens
+
+Robolectric runs the Compose screens on the JVM, so they are covered by the
+same `testDebugUnitTest` CI already runs — no emulator and no device. The
+screens are pure functions of their arguments, and the tests drive them the way
+a person would:
+
+- the home screen renders each of the five connection states and offers the way
+  out that belongs to it, and reports every button press back to its caller;
+- the settings form hands every edit back rather than keeping it, masks the
+  agent token until it is revealed, shows the pin in full, and asks before
+  unpairing;
+- the pairing sheet shows the origin, the server name and the pin before
+  anything is claimed, refuses to be dismissed while a single-use code is in
+  flight, keeps the server's own words alongside the mapped failure reason, and
+  never fires a confirmation callback that was not pressed;
+- the welcome screen explains the three steps and keeps the manual form
+  reachable for a server-mode deployment.
+
+### Dashboard
+
+`frontend/lib.js` holds the dashboard's decisions — byte and rate formatting,
+the age of a heartbeat, the pairing countdown, the traffic-counter deltas, and
+the check that refuses to put anything but an SVG in the QR's `img` source.
+`node --test frontend/lib.test.js` covers it with no build step and no
+dependencies, the same deal the rest of the frontend gets.
+
 ### CI-only integration
 
 - Android Gradle unit tests, lint, and debug APK compilation in the pinned
   toolchain image;
-- Docker Compose validation, image builds, live startup, `nginx -t` inside the
-  exact image, and an HTTPS health check through the gateway;
+- Docker Compose validation, image builds, live startup, and a system test
+  that drives the whole stack through nginx: TLS termination and the security
+  headers, the 308 from port 80, the admin API, a simulated phone whose control
+  poll and circuit WebSockets go through the gateway's Upgrade map, 512 KiB over
+  the stream SOCKS5 listener on 1080, a round trip over the TLS-wrapped listener
+  on 1081, and a UDP ASSOCIATE through the published 12000-12031 range and the
+  `$server_port` map behind it. `nginx -t` only parses the stream block; this is
+  the only thing that executes it;
 - `govulncheck`, CodeQL, gitleaks, actionlint, zizmor, hadolint, shellcheck,
   yamllint, and eslint.
 

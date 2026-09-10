@@ -635,18 +635,31 @@ docker-compose.yml    Complete server deployment
 # Tests
 
 ```bash
-make test          # Go unit + race + coverage, backend smoke, frontend syntax, YAML/XML/shell checks
-make test-android  # Gradle unit tests, lint, debug APK
-make test-docker   # Compose build, startup, health check, nginx -t
+make test          # Go unit + race + coverage, backend smoke, SOCKS end to end, dashboard tests, YAML/XML/shell checks
+make test-android  # Gradle unit tests including the Compose screens, lint, debug APK
+make test-docker   # Compose build, startup, and real traffic through nginx
 make test-live     # Real HTTP/HTTPS/download/Git/WSS/security checks through every phone
 ```
 
-The two process-level end-to-end tests can also be run directly:
+The process-level tests can also be run directly:
 
 ```bash
-./.github/e2e/personal-smoke.sh    # pair a simulated phone over a self-signed certificate, then unpair it
-python3 .github/e2e/socks-e2e.py   # drive TCP and UDP through the proxy with a simulated phone
+./.github/e2e/personal-smoke.sh     # pair a simulated phone over a self-signed certificate, then unpair it
+python3 .github/e2e/socks-e2e.py    # drive TCP and UDP through the backend with a simulated phone
+python3 .github/e2e/system-test.py  # the same traffic through the whole compose stack, nginx included
+node --test frontend/lib.test.js    # the dashboard's own logic
 ```
+
+`system-test.py` needs docker and a `.env` from `scripts/setup.sh`. It brings
+the stack up, drives SOCKS5 TCP on 1080, TLS-wrapped SOCKS5 on 1081, a UDP
+ASSOCIATE through the published relay ports, and a simulated phone whose
+control poll and circuit WebSockets go through the gateway, then tears it down
+again. `nginx -t` only parses the stream configuration; this is what executes
+it. Pass `--keep` to leave the stack running.
+
+The Android screens are covered by the same `make test-android`: Robolectric
+runs Compose on the JVM, so the home, settings, pairing and welcome screens are
+driven and asserted without an emulator.
 
 CI runs the Go, smoke, end-to-end, Android, and Compose jobs on every push and
 pull request, holds Go coverage above a floor, and uploads the debug APK as a

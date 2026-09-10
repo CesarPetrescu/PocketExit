@@ -53,6 +53,7 @@ jobs:
             deployment:
               - 'backend/**'
               - 'frontend/**'
+              - '.github/e2e/**'
               - 'nginx/**'
               - 'spark-tunnel/**'
               - 'docker-compose*.yml'
@@ -262,7 +263,16 @@ jobs:
         run: |
           "$RUNNER_TEMP/pyyaml/bin/python" .github/e2e/parse-documents.py
       - name: Frontend syntax
-        run: node --check frontend/app.js
+        run: |
+          for file in frontend/*.js; do
+            node --check "$file"
+          done
+      # The dashboard has no build step and no package.json, so its tests are
+      # node:test against the pure half of it. app.js itself reads the document
+      # at load and cannot be imported; frontend/lib.js is the part that decides
+      # anything, and lib.test.js covers it.
+      - name: Frontend tests
+        run: node --test frontend/lib.test.js
       - name: Frontend lint
         run: |
           npx --yes eslint@10.10.0 --no-config-lookup \
@@ -515,40 +525,15 @@ jobs:
           name: trivy-reports
           path: trivy-*.txt
           if-no-files-found: ignore
-      - name: Start the stack
-        run: docker compose up -d
-      - name: Validate the nginx configuration
-        # nginx only starts once the backend reports healthy, and the backend's
-        # HEALTHCHECK first fires at 15s, so this waits well past that before
-        # calling a missing container a configuration failure.
-        run: |
-          for attempt in $(seq 1 90); do
-            if docker compose exec -T nginx nginx -t; then
-              exit 0
-            fi
-            if [ "$attempt" -eq 90 ]; then
-              echo "nginx never accepted its configuration" >&2
-              docker compose logs
-              exit 1
-            fi
-            sleep 1
-          done
-      - name: Test the gateway
-        run: |
-          for attempt in $(seq 1 60); do
-            if curl -kfsS https://127.0.0.1/api/v1/health >/dev/null; then
-              break
-            fi
-            if [ "$attempt" -eq 60 ]; then
-              docker compose logs
-              exit 1
-            fi
-            sleep 1
-          done
-          curl -kfsS https://127.0.0.1/ | grep -q '<title>'
-      - name: Logs on failure
-        if: failure()
-        run: docker compose logs
+      # Brings the stack up, drives real SOCKS5 TCP and UDP and a simulated
+      # phone's circuit WebSockets through nginx, and tears it down again.
+      # nginx -t only parses the stream block; this is the only thing that
+      # executes it.
+      - name: System test through the gateway
+        run: python3 .github/e2e/system-test.py
+      # The system test prints the stack's logs itself before tearing it down,
+      # so there is nothing left to collect here. This is only for the case
+      # where the job is killed before the script's own teardown runs.
       - name: Stop services
         if: always()
         run: docker compose down -v
