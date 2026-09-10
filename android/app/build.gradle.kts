@@ -102,7 +102,7 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:5.3.0")
 
     // Embedded Chromium networking stack: HTTP/3 over QUIC on supported paths.
-    implementation("org.chromium.net:cronet-embedded:143.7445.0")
+    implementation("org.chromium.net:cronet-embedded:500.0.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
