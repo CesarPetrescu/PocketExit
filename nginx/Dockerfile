@@ -1,4 +1,4 @@
-FROM nginx:1.31.3-alpine
+FROM nginx:1.31.5-alpine
 RUN nginx -V 2>&1 | grep -q -- '--with-http_v3_module' \
     && nginx -V 2>&1 | grep -q -- '--with-stream'
 COPY nginx/nginx.conf /etc/nginx/nginx.conf
