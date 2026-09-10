@@ -2,6 +2,7 @@ package nodes
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -79,5 +80,56 @@ func TestCommandRoundTrip(t *testing.T) {
 	}
 	if got.CircuitID != command.CircuitID {
 		t.Fatalf("expected %s, got %s", command.CircuitID, got.CircuitID)
+	}
+}
+
+func TestRemoveDropsTheRecordSoARepairStartsClean(t *testing.T) {
+	registry := NewRegistry(time.Minute, 8)
+	if _, err := registry.Heartbeat(model.HeartbeatRequest{NodeID: "pixel-8", DeviceName: "Pixel 8"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.Get("pixel-8"); !ok {
+		t.Fatal("the node should be registered after a heartbeat")
+	}
+
+	if err := registry.Remove("pixel-8"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.Get("pixel-8"); ok {
+		t.Fatal("the record survived Remove")
+	}
+	if len(registry.List()) != 0 {
+		t.Fatalf("List still reports %d nodes", len(registry.List()))
+	}
+	if err := registry.Remove("pixel-8"); !errors.Is(err, ErrNodeNotFound) {
+		t.Fatalf("removing twice returned %v, want ErrNodeNotFound", err)
+	}
+
+	// Re-pairing the same id must land on a usable node. Disabling instead of
+	// removing left Enabled=false behind, so the phone paired and then silently
+	// refused every circuit.
+	node, err := registry.Heartbeat(model.HeartbeatRequest{NodeID: "pixel-8", DeviceName: "Pixel 8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !node.Enabled {
+		t.Fatal("a re-paired node came back disabled")
+	}
+}
+
+func TestRemoveDiscardsQueuedCommands(t *testing.T) {
+	registry := NewRegistry(time.Minute, 8)
+	if _, err := registry.Heartbeat(model.HeartbeatRequest{NodeID: "pixel-8"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := registry.QueueCommand(ctx, "pixel-8", model.Command{Type: model.CommandClose}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Remove("pixel-8"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.QueueCommand(ctx, "pixel-8", model.Command{Type: model.CommandClose}); !errors.Is(err, ErrNodeNotFound) {
+		t.Fatalf("queueing to a removed node returned %v, want ErrNodeNotFound", err)
 	}
 }

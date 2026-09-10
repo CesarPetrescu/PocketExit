@@ -22,3 +22,6 @@ android/local.properties
 android/gradle/wrapper/gradle-wrapper.jar
 android/app/build/
 android/build/
+
+__pycache__/
+*.pyc

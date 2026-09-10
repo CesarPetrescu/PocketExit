@@ -1,0 +1,33 @@
+# Secret scanning configuration.
+#
+# It starts from the upstream ruleset and adds allowances only for the fixed,
+# published test credentials the smoke and end-to-end harnesses use. Those
+# strings are in the repository on purpose: they configure a backend that is
+# started, driven and killed inside a single CI step and never reaches a
+# network anyone else can see.
+[extend]
+useDefault = true
+
+[[rules]]
+# Keep a rule id so a future baseline can refer to it, but the interesting work
+# is the allowlist below.
+id = "pocketexit-placeholder"
+description = "placeholder so this file always defines at least one rule"
+regex = '''pocketexit-never-matches-this-literal'''
+keywords = ["pocketexit-never-matches-this-literal"]
+
+[allowlist]
+description = "Fixed test credentials belonging to the CI harnesses"
+regexes = [
+  '''smoke-(admin|agent|proxy)-[a-z]+-2026''',
+  '''e2e-(admin|agent|proxy)-[a-z]+-2026''',
+  '''(admin|agent|proxy)-test-(token|password)-2026''',
+  '''change-me-(admin|proxy)''',
+]
+paths = [
+  # Generated at setup time and never committed; the pattern is here so a
+  # developer running the scanner over a configured working tree is not
+  # buried in findings from their own machine.
+  '''^\.env$''',
+  '''^nginx/certs/''',
+]

@@ -1,0 +1,88 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Monday morning, so a new query pack is applied to the default branch
+    # without waiting for someone to open a pull request.
+    - cron: "27 5 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: Analyze ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The Go module lives under backend/, so it is built explicitly
+          # rather than left to the autobuilder to find.
+          - language: go
+            build-mode: manual
+          # Kotlin has no buildless extractor: build-mode none extracts .java
+          # only, and this app is pure Kotlin, so it produced an empty database
+          # and a configuration error. It needs a real traced Gradle build.
+          - language: java-kotlin
+            build-mode: manual
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - if: matrix.language == 'go'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-and-quality
+
+      # The runner already ships Temurin 17 and the Android SDK, so the build
+      # needs no extra actions. android-36 and build-tools 36.0.0 match
+      # compileSdk in android/app/build.gradle.kts.
+      - name: Install the Android SDK packages
+        if: matrix.language == 'java-kotlin'
+        run: |
+          set -euo pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;36.0.0" >/dev/null
+
+      - name: Build Go
+        if: matrix.language == 'go'
+        working-directory: backend
+        run: go build ./...
+
+      # CodeQL traces this command to build its Kotlin database. assembleDebug
+      # compiles every source file the app ships, which is what the extractor
+      # needs; the unit tests and lint already run in the CI workflow.
+      - name: Build Android
+        if: matrix.language == 'java-kotlin'
+        working-directory: android
+        env:
+          JAVA_HOME: /usr/lib/jvm/temurin-17-jdk-amd64
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Analyse
+        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          category: /language:${{ matrix.language }}

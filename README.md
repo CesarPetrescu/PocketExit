@@ -1,118 +1,265 @@
-<div align="center">
-
 # PocketExit
 
-**Turn Android phones you own into selectable, private Internet exit nodes.**
-
-One authenticated SOCKS5 gateway. Pick a phone, pick a radio, and the traffic
-leaves through that SIM — no root, no `VpnService`, no ADB, no custom ROM.
+**Turn an Android phone you own into a selectable Internet exit node.**
 
 [![CI](https://github.com/CesarPetrescu/PocketExit/actions/workflows/ci.yml/badge.svg)](https://github.com/CesarPetrescu/PocketExit/actions/workflows/ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/CesarPetrescu/PocketExit)](https://github.com/CesarPetrescu/PocketExit/releases/latest)
-[![License](https://img.shields.io/github/license/CesarPetrescu/PocketExit)](LICENSE)
-[![Go](https://img.shields.io/badge/backend-Go%201.23-00ADD8)](backend/go.mod)
-[![Android](https://img.shields.io/badge/agent-Kotlin%20%C2%B7%20API%2026%2B-3DDC84)](android/app/build.gradle.kts)
-
-[Download the APK](https://github.com/CesarPetrescu/PocketExit/releases/latest) ·
-[Live dashboard](https://exit.photonspark.ro) ·
-[Architecture](ARCHITECTURE.md) ·
-[Protocol](PROTOCOL.md) ·
-[Security](SECURITY.md)
-
-</div>
+[![CodeQL](https://github.com/CesarPetrescu/PocketExit/actions/workflows/codeql.yml/badge.svg)](https://github.com/CesarPetrescu/PocketExit/actions/workflows/codeql.yml)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
 
 ## What it is
 
-PocketExit is a self-hosted SOCKS5 proxy whose exit nodes are Android phones.
-The server authenticates clients and schedules circuits; the selected phone
-opens each destination through Wi-Fi or its SIM and relays the bytes back. The
-phone needs no root, VPN profile, inbound port, or ADB connection.
+PocketExit is a SOCKS5 proxy whose exit nodes are Android phones. You point a
+browser, `curl`, or a scraper at the proxy; the selected phone opens the
+destination through its Wi-Fi or its SIM and relays the bytes back. It is for
+people who own the phones and the SIMs and want their own traffic to leave
+through them — testing a service from a mobile network, reaching something that
+only answers cellular clients, or just having an egress address that is not the
+one their ISP hands out.
 
-## Install and run
+The phone needs no root, no `VpnService`, no ADB, no custom ROM, and no inbound
+port. It only ever dials out.
 
-1. Start the gateway (requires Docker Compose, OpenSSL, DNS, and the documented
-   [public ports](#quick-start)):
+![The PocketExit dashboard with three Galaxy phones online](docs/images/dashboard-desktop.png)
 
-   ```bash
-   git clone https://github.com/CesarPetrescu/PocketExit.git
-   cd PocketExit
-   DOMAIN=proxy.example.com make setup
-   $EDITOR .env
-   docker compose up --build -d
-   ```
+<sup>The administration dashboard in server mode. Capture from a live v0.3.0
+deployment; the admin token is masked and device addresses are omitted.</sup>
 
-2. [Download the latest APK](https://github.com/CesarPetrescu/PocketExit/releases/latest),
-   or build it locally with only Docker:
+There are two ways to run it, and you only need to read one of them:
 
-   ```bash
-   make android-apk
-   # → android/app/build/outputs/apk/debug/app-debug.apk
-   ```
-
-   The build container removes itself after the run. Install the APK on each
-   phone, then enter the backend URL, a node ID from `AGENT_TOKENS_JSON`, and
-   that node's token from `.env`. Start the agent.
-
-3. Send traffic through the gateway using `SOCKS_USERNAME` and `SOCKS_PASSWORD`
-   from `.env`:
-
-   ```bash
-   curl --proxy socks5h://proxy.example.com:1080 \
-        --proxy-user 'proxy@s20u!cellular:PASSWORD' \
-        https://api.ipify.org
-   # → the public IPv4 of the SIM in the phone named s20u
-   ```
-
-See the full [Quick start](#quick-start) for trusted TLS, phone configuration,
-SparkTunnel, validation, and selector examples.
-
-> [!IMPORTANT]
-> v0.4.0 moves circuit bytes to authenticated WebSockets. A simulated phone
-> completed two independent 8.4 MB SOCKS transfers across reconnects; the older
-> v0.3.0 HTTP-stream cutoff remains documented below as historical evidence.
+| | [Personal](#personal--one-laptop-one-phone) | [Server](#server--a-deployment-with-several-phones) |
+|---|---|---|
+| What you need | A laptop and a phone on the same network | A host with a public address and a DNS name |
+| Setup | Run one binary, scan a QR code | Docker Compose, TLS certificate, hand-minted tokens |
+| Certificate | Self-signed, pinned by the phone | Trusted by Android's system store |
+| Who can use the proxy | The laptop, on `127.0.0.1:1080` | Anyone you give the credentials and the port to |
+| Adding a phone | Scan a code | Edit `AGENT_TOKENS_JSON`, restart, type the token |
 
 ---
 
-## Contents
+# Personal — one laptop, one phone
 
-| | |
-|---|---|
-| **Understand it** | [What it does](#what-it-does) · [System on one page](#the-system-on-one-page) · [Two independent planes](#the-one-idea-that-matters-two-independent-planes) · [Anatomy of one request](#anatomy-of-one-request) |
-| **The logic** | [Choosing a phone](#1-choosing-a-phone) · [Resolving the policy](#2-resolving-the-exit-policy) · [Circuit lifecycle](#3-circuit-lifecycle) · [Moving bytes](#4-how-the-bytes-actually-move) · [UDP](#5-the-udp-path) · [Blocking destinations](#6-where-a-destination-gets-blocked) · [Authentication](#7-who-is-allowed-to-do-what) · [Inside the agent](#8-inside-the-android-agent) |
-| **Run it** | [Quick start](#quick-start) · [Configuration](#configuration) · [API](#api-surface) · [Tests](#tests) |
-| **Know the edges** | [Real-hardware evidence](#verified-on-real-hardware) · [Limits](#limits-stated-plainly) · [Security](SECURITY.md) |
+No domain, no certificate authority, no tokens to type. The binary runs on your
+laptop, the phone pairs by camera, and the proxy listens on loopback.
+
+```mermaid
+flowchart LR
+    APP["<b>curl · browser · scraper</b><br/>on the laptop"] -->|"SOCKS5<br/>127.0.0.1:1080"| PROC
+    BROWSER["<b>dashboard</b><br/>in the laptop's browser"] -->|"HTTPS 8443"| PROC
+
+    subgraph laptop["Your laptop — one process, no containers"]
+        PROC["<b>pocketexit personal</b><br/>SOCKS5 · control plane · dashboard<br/>state in ~/.pocketexit"]
+    end
+
+    PROC <-->|"HTTPS + WSS on the LAN<br/>certificate pinned by the phone"| PHONE["<b>Android agent</b><br/>paired by QR code"]
+    PHONE -->|"socket bound to Wi-Fi <b>or to the SIM</b>"| DEST["Destination on the Internet"]
+
+    classDef client fill:#2b2140,stroke:#b18cf0,color:#f5efff
+    classDef server fill:#16233a,stroke:#7aa2d6,color:#eef4ff
+    classDef phone fill:#0f3b33,stroke:#34d3a6,color:#ecfdf5
+    classDef net fill:#3a2a15,stroke:#e0a458,color:#fff6e8
+    class APP,BROWSER client
+    class PROC server
+    class PHONE phone
+    class DEST net
+```
+
+## 1. Build and run the binary
+
+Requires Go 1.23 or newer. There is no released backend binary yet, so build it.
+
+```bash
+git clone https://github.com/CesarPetrescu/PocketExit.git
+cd PocketExit/backend
+go build -o pocketexit ./cmd/server
+./pocketexit personal --pair
+```
+
+That prints everything you need and then serves:
+
+```text
+PocketExit personal mode
+
+  Dashboard       https://192.168.1.50:8443/
+  Admin token     example-admin-token-not-a-real-credential-0
+  SOCKS5 proxy    127.0.0.1:1080
+  SOCKS username  proxy
+  SOCKS password  example-socks-password-not-a-real-credential
+  Certificate pin 3aCuAD5-R6Hm9iPc-PsJyTW4h4ZLsjvI78yCc5qNs-Q
+  Certificate     /home/you/.pocketexit/tls.crt
+  State directory /home/you/.pocketexit
+  Dashboard files /home/you/PocketExit/frontend
+
+  Pairing code    B3NJ-B6GD  (expires 8:03PM)
+  Scan this with the phone's camera app:
+
+      … 29 rows of block characters forming a QR code …
+
+  pocketexit://configure?fp=3aCuAD5-R6Hm9iPc-PsJyTW4h4ZLsjvI78yCc5qNs-Q&name=laptop&pair=B3NJB6GD&server=https%3A%2F%2F192.168.1.50%3A8443&v=2
+
+time=2026-09-09T19:53:15.607Z level=INFO msg="issued a new certificate" …
+time=2026-09-09T19:53:15.608Z level=INFO msg="HTTPS API listening" address=0.0.0.0:8443 server_url=https://192.168.1.50:8443
+time=2026-09-09T19:53:15.608Z level=INFO msg="SOCKS5 proxy listening" address=127.0.0.1:1080 udp_port_start=12000 udp_port_end=12031
+```
+
+Every secret in that block is generated on first run, written to
+`~/.pocketexit/state.json`, and reused on every later run.
+
+On first start the process creates `~/.pocketexit` with mode `0700` and issues
+a self-signed certificate covering `localhost`, the loopback addresses, and
+every non-loopback address on the host. Nothing else is installed; the binary
+serves the dashboard itself.
+
+## 2. Install the app
+
+Pairing is newer than the last tagged release, so build the APK. Docker is the
+only thing you need installed:
+
+```bash
+make android-apk
+# APK: android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+The build container removes itself after the run. Copy the APK to the phone
+however you like — USB, cloud storage, a browser download. No ADB.
+
+**You do not need to install a certificate on the phone.** The agent
+authenticates the laptop by the public-key pin carried in the QR code, which
+bypasses the platform trust store, so a release build pairs with a self-signed
+LAN certificate as-is.
+
+## 3. Scan the code
+
+Open the phone's ordinary camera app and point it at the QR in the terminal, or
+at the one on the dashboard. There is no scanner inside the app and no camera
+permission to grant.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant L as Laptop
+    participant S as Laptop screen
+    participant P as Phone
+    L->>S: mint an 8-character code, render the QR
+    Note over S,P: the pin crosses on the screen, in front of you —<br/>not over the network
+    P->>P: camera resolves pocketexit://configure → the app
+    Note over P: the app shows the server origin, its name,<br/>and the pin, and writes nothing yet
+    P->>L: POST /pair/v1/claim over the pinned TLS connection
+    L-->>P: node id + agent token + SOCKS host and port
+    Note over P: agent stays stopped until you press Start
+```
+
+The app shows what it is about to trust before anything is stored, so a
+malicious `pocketexit://` link cannot silently repoint the agent. Confirm, then
+press **Start** on the phone. It appears in the dashboard's fleet list within a
+heartbeat.
+
+The code lasts 10 minutes, pairs one phone, and is destroyed the moment it is
+used. Mint another from the dashboard for the next phone, or restart with
+`--pair`.
+
+## 4. Send traffic through it
+
+Use the SOCKS username and password from the startup block:
+
+```bash
+curl --proxy socks5h://127.0.0.1:1080 \
+     --proxy-user 'proxy:example-socks-password-not-a-real-credential' \
+     https://api.ipify.org
+# → the public address of the phone, not the laptop's
+```
+
+Force this one request onto the SIM even though the phone is on Wi-Fi:
+
+```bash
+curl --proxy socks5h://127.0.0.1:1080 \
+     --proxy-user 'proxy!cellular:example-socks-password-not-a-real-credential' \
+     https://api.ipify.org
+```
+
+See [Picking a phone and a radio](#picking-a-phone-and-a-radio) for the full
+selector grammar. Before a phone has paired and started, a CONNECT is refused
+rather than routed anywhere else:
+
+```text
+curl: (97) Can't complete SOCKS5 connection to api.ipify.org. (3)
+```
+
+## The dashboard
+
+Open the URL from the startup block and paste the admin token. Your browser
+will warn about the self-signed certificate; that is expected, and it is why
+the phone pins the key instead of trusting a chain. From there you can mint and
+cancel pairing codes, watch live circuits and byte counters, change each
+phone's control and exit policy, disable a phone, and unpair one (which revokes
+its token and closes its circuits).
+
+For scripts, the same certificate works with `curl`:
+
+```bash
+curl --cacert ~/.pocketexit/tls.crt https://127.0.0.1:8443/api/v1/health
+# {"status":"ok","time":"2026-09-09T19:50:09.855349171Z"}
+```
+
+## Flags and defaults
+
+```text
+pocketexit personal [flags]
+
+  -dir string          state directory (default $POCKETEXIT_HOME, else ~/.pocketexit)
+  -frontend string     dashboard directory to serve (default the bundled frontend)
+  -https-addr string   HTTPS listener address (default "0.0.0.0:8443")
+  -pair                mint a pairing code at startup and print its QR code
+  -socks-addr string   SOCKS5 listener address (default "127.0.0.1:1080")
+```
+
+| | Personal | Server |
+|---|---|---|
+| HTTPS listener | `0.0.0.0:8443`, direct TLS, no nginx | `:8080` behind nginx |
+| SOCKS listener | `127.0.0.1:1080` — loopback only | `:1080`, published |
+| UDP relay | `127.0.0.1:12000-12031` | `0.0.0.0:12000-12031` |
+| Admin token | generated into `state.json` | `ADMIN_TOKEN` |
+| Agent tokens | minted by pairing | `AGENT_TOKENS_JSON` |
+| Audit log | `~/.pocketexit/audit.jsonl` | `AUDIT_LOG_PATH` |
+
+SOCKS binds to loopback because the laptop is the only client. `--socks-addr`
+can move it, and the process logs a warning when the address is not loopback —
+publishing it puts an authenticated open proxy on your LAN.
+
+`~/.pocketexit` holds the TLS private key (`0600`), and `state.json` (`0600`)
+holds the admin token, the SOCKS password, and every paired phone's agent
+token. Back it up like a password file or not at all.
+
+## When the phone cannot reach the laptop
+
+The address in the QR is the first non-loopback address on the host, which is
+wrong on a multi-homed machine. Pin the interface instead:
+
+```bash
+./pocketexit personal --pair --https-addr 192.168.1.50:8443
+```
+
+Otherwise: the laptop's firewall has to allow inbound TCP 8443, and the access
+point must not have client isolation turned on.
 
 ---
 
-## What it does
+# Server — a deployment with several phones
 
-- **Selectable egress.** A client picks *which phone* and *which radio* serves a
-  connection, per request, using only the SOCKS5 username field.
-- **Real cellular egress.** The destination socket is bound to the phone's
-  cellular `Network` handle, so the traffic exits through the SIM even while
-  Wi-Fi stays the phone's default route.
-- **No inbound listener on a phone.** Phones only ever dial out. Everything
-  arrives over an authenticated long poll from the gateway.
-
-The Android side uses ordinary public APIs only — no root, no ADB dependency, no
-`VpnService`, no process-wide route changes, no device-owner mode.
-
----
-
-## The system on one page
+The deployed path: nginx terminates TLS with a certificate Android already
+trusts, stream-proxies SOCKS, and the Go backend runs behind it on a private
+Compose network. Each phone gets a token you mint by hand in
+`AGENT_TOKENS_JSON`.
 
 ```mermaid
 flowchart TB
     CLI["<b>SOCKS5 client</b><br/>curl · browser · scraper"]
     BROWSER["<b>Browser</b><br/>admin dashboard"]
-    SPARK["<b>PhotonSpark edge</b><br/>optional · no inbound rule"]
 
     CLI -->|"TCP 1080/1081 · UDP 12000-12031"| NGINX
     BROWSER -->|"HTTPS 443"| NGINX
-    SPARK -.->|"HTTPS/WebSocket tunnel"| NGINX
 
-    subgraph vps["Server — only Nginx publishes host ports"]
-        NGINX["<b>Nginx</b> · TLS · HTTP/2 · HTTP/3<br/>TCP stream proxy · UDP relay pool"]
+    subgraph vps["Host — only nginx publishes ports"]
+        NGINX["<b>nginx</b> · TLS · HTTP/2 · HTTP/3<br/>TCP stream proxy · UDP relay pool"]
         GO["<b>Go backend</b> · SOCKS5 · auth<br/>scheduler · circuit manager"]
         NGINX -->|"private Docker bridge, never published"| GO
     end
@@ -121,7 +268,7 @@ flowchart TB
     GO <--> P2["agent <b>s22u</b>"]
     GO <--> P3["agent <b>s24u</b>"]
 
-    P1 -->|"socket bound to Wi-Fi <b>or to the SIM</b>"| DEST["Destination on the Internet"]
+    P1 --> DEST["Destination on the Internet"]
     P2 --> DEST
     P3 --> DEST
 
@@ -130,507 +277,27 @@ flowchart TB
     classDef phone fill:#0f3b33,stroke:#34d3a6,color:#ecfdf5
     classDef net fill:#3a2a15,stroke:#e0a458,color:#fff6e8
     class CLI,BROWSER client
-    class NGINX,GO,SPARK server
+    class NGINX,GO server
     class P1,P2,P3 phone
     class DEST net
 ```
 
-Every public port lands on Nginx. The Go process is reachable only on the
-internal Compose network.
-
-| Port | Transport | Exposed | Purpose |
-|---|---|---|---|
-| `80` | TCP | yes | 308 redirect to HTTPS |
-| `443` | TCP | yes | Dashboard, `/api/`, `/agent/` over TLS + HTTP/2 |
-| `443` | UDP | yes | The same, over HTTP/3 / QUIC |
-| `1080` | TCP | yes | Authenticated SOCKS5 (Nginx `stream` → backend) |
-| `1081` | TLS/TCP | yes | TLS-wrapped SOCKS5 for a local TLS-wrapper client |
-| `12000–12031` | UDP | yes | SOCKS5 UDP relay pool, one port per association |
-| `8080` | TCP | **no** | Go HTTP API, internal bridge only |
-| `8081` | TCP | **no** | Plain-HTTP origin for the optional SparkTunnel connector |
-
----
-
-## The one idea that matters: two independent planes
-
-Most phone-proxy projects have one route. PocketExit has two, decided
-separately, and re-decided per circuit.
-
-```mermaid
-flowchart LR
-    WIFI["<b>Wi-Fi</b><br/>registerNetworkCallback<br/>Network handle"]
-    CELL["<b>Cellular</b><br/>requestNetwork keeps it warm<br/>Network handle"]
-
-    WIFI --> CTRL
-    CELL --> CTRL
-    WIFI --> EXIT
-    CELL --> EXIT
-
-    CTRL["<b>PolicySelector</b><br/>control policy"]
-    EXIT["<b>PolicySelector</b><br/>exit policy"]
-
-    CTRL -->|"Cronet + OkHttp are bound<br/>to this Network handle"| GW["Gateway :443<br/>heartbeats · commands · circuit WebSockets"]
-    EXIT -->|"DNS resolution and the destination<br/>socket are bound to this Network handle"| DEST["Destination"]
-
-    classDef radio fill:#1d2b3f,stroke:#8fb3e0,color:#eef4ff
-    classDef sel fill:#0f3b33,stroke:#34d3a6,color:#ecfdf5
-    classDef out fill:#3a2a15,stroke:#e0a458,color:#fff6e8
-    class WIFI,CELL radio
-    class CTRL,EXIT sel
-    class GW,DEST out
-```
-
-`NetworkMonitor` holds both radios alive at once. `requestNetwork` on cellular
-keeps a usable cellular `Network` object available while Android keeps Wi-Fi as
-the system default route — the process itself is never globally bound.
-
-Typical operation:
-
-```text
-Android ↔ gateway control transport : Wi-Fi preferred
-Android → destination socket        : cellular only
-```
-
-| Control | Exit | Result |
-|---|---|---|
-| Wi-Fi preferred | Cellular only | QUIC rides Wi-Fi when it exists; public egress always uses the SIM |
-| Cellular only | Cellular only | Whole path on SIM data |
-| Cellular preferred | Wi-Fi only | Control survives outside Wi-Fi; destinations require Wi-Fi |
-| Automatic | Automatic | Wi-Fi first, cellular fallback, both planes |
-
-If Wi-Fi vanishes, the control connection can reconnect over cellular while
-destination sockets stay governed by their own exit policy. `CELLULAR_ONLY`
-**fails the circuit** rather than quietly leaking it through Wi-Fi.
-
----
-
-## Anatomy of one request
-
-What actually happens between `curl` and the destination, in order:
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as SOCKS5 client
-    participant G as Go backend
-    participant P as Android agent
-    participant D as Destination
-
-    Note over C,G: Nginx stream-proxies :1080 through untouched
-    C->>G: greeting, offers method 0x02
-    G-->>C: username/password required
-    C->>G: proxy@s20u!cellular + password
-    Note over G: parseSelector → s20u, CELLULAR_ONLY<br/>credentials compared in constant time
-    C->>G: CONNECT example.com:443
-    Note over G: ValidateHost rejects loopback, RFC1918, CGNAT,<br/>link-local, multicast. Registry.Choose picks a node that is<br/>enabled, fresh, under its ceiling, cellular validated
-    G->>G: CreateLimited → id + down/up pipes, pending
-    P->>G: GET /agent/v1/control, long poll ≤ 5s
-    G-->>P: open_tcp + circuit_id + CELLULAR_ONLY
-    Note over P: resolve on the cellular Network<br/>DestinationAcl drops private answers
-    P->>D: TCP connect from the SIM, 10s budget
-    D-->>P: connected
-    P->>G: GET :id/ws, authenticated WebSocket upgrade
-    P->>G: POST :id/status connected
-    Note over G: MarkOpen releases the waiting handshake
-    G-->>C: 0x05 0x00 success
-    C->>D: application bytes, end to end
-    D-->>C: response bytes
-```
-
-> [!NOTE]
-> The SOCKS success reply is never optimistic. `handleTCP` blocks on
-> `circuit.WaitReady` until the phone has an established socket to the
-> destination and has said so. A phone that cannot honour the policy produces a
-> SOCKS error, not a silently rerouted connection.
-
----
-
-# The logic
-
-## 1. Choosing a phone
-
-`nodes.Registry.Choose` runs on every CONNECT and on every new UDP target.
-
-```mermaid
-flowchart LR
-    START{"does the selector<br/>name a node?"} -->|"proxy@s20u"| ONE["that node is the<br/>only candidate"]
-    START -->|"proxy"| ALL["every registered<br/>node is a candidate"]
-    ONE --> GATE
-    ALL --> GATE
-    GATE["run <b>usable()</b> on<br/>each candidate"] --> COUNT{"survivors?"}
-    COUNT -->|"none"| FAIL["SOCKS reply 0x03<br/>network unreachable,<br/>nothing is rerouted"]
-    COUNT -->|"one or more"| PICK["fewest active circuits wins,<br/>tie-break freshest heartbeat<br/>→ circuit created, pending"]
-
-    classDef bad fill:#3b1720,stroke:#f0708c,color:#ffeef2
-    classDef good fill:#0f3b33,stroke:#34d3a6,color:#ecfdf5
-    classDef neutral fill:#16233a,stroke:#7aa2d6,color:#eef4ff
-    class FAIL bad
-    class PICK good
-    class ONE,ALL,GATE neutral
-```
-
-Every gate has to pass, and a failure is never rerouted onto another radio:
-
-```mermaid
-flowchart LR
-    IN["candidate"] --> C1{"enabled?"}
-    C1 -->|yes| C2{"heartbeat<br/>< 45s old?"}
-    C2 -->|yes| C3{"circuits<br/>< 128?"}
-    C3 -->|yes| C4{"policy has a<br/><b>validated</b> radio?"}
-    C4 -->|yes| KEEP["kept"]
-    C1 -->|no| DROP["rejected"]
-    C2 -->|no| DROP
-    C3 -->|no| DROP
-    C4 -->|no| DROP
-
-    classDef bad fill:#3b1720,stroke:#f0708c,color:#ffeef2
-    classDef good fill:#0f3b33,stroke:#34d3a6,color:#ecfdf5
-    class DROP bad
-    class KEEP good
-```
-
-*Validated* is Android's own verdict (`NET_CAPABILITY_VALIDATED`) — the radio is
-attached **and** proved it reaches the Internet. A phone on a captive-portal
-Wi-Fi is not selectable for a Wi-Fi policy.
-
-Which radio each policy demands:
-
-| Requested policy | `usable()` requires |
-|---|---|
-| `WIFI_ONLY` | validated Wi-Fi |
-| `CELLULAR_ONLY` | validated cellular |
-| `AUTO`, `WIFI_PREFERRED`, `CELLULAR_PREFERRED` | at least one validated radio |
-
-## 2. Resolving the exit policy
-
-Three places can name a policy. This is the precedence chain:
-
-```mermaid
-flowchart LR
-    SEL["<b>1.</b> SOCKS username<br/>proxy@s20u<b>!cellular</b>"] -->|"wins if present"| EFF
-    NODE["<b>2.</b> node.exit_policy<br/>set on the dashboard"] -->|"used when the<br/>selector omits !policy"| EFF
-    EFF["effective policy<br/>for <b>this circuit</b>"] --> CMD["carried inside<br/>open_tcp / open_udp"]
-    CMD --> AGENT["<b>3.</b> agent uses its own stored policy<br/>only if the command carries none"]
-
-    classDef a fill:#2b2140,stroke:#b18cf0,color:#f5efff
-    classDef b fill:#16233a,stroke:#7aa2d6,color:#eef4ff
-    classDef c fill:#0f3b33,stroke:#34d3a6,color:#ecfdf5
-    class SEL,NODE a
-    class EFF,CMD b
-    class AGENT c
-```
-
-`PolicySelector` on the phone then turns a policy plus live radio state into
-exactly one `Network` handle, or `NONE`:
-
-| Policy | Both validated | Only Wi-Fi | Only cellular | Neither |
-|---|---|---|---|---|
-| `AUTO` | Wi-Fi | Wi-Fi | cellular | **fail** |
-| `WIFI_ONLY` | Wi-Fi | Wi-Fi | **fail** | **fail** |
-| `CELLULAR_ONLY` | cellular | **fail** | cellular | **fail** |
-| `WIFI_PREFERRED` | Wi-Fi | Wi-Fi | cellular | **fail** |
-| `CELLULAR_PREFERRED` | cellular | Wi-Fi | cellular | **fail** |
-
-`AUTO` and `WIFI_PREFERRED` are behaviourally identical today. **fail** means
-`NetworkKind.NONE`: the circuit errors out. There is no implicit fallback across
-a `_ONLY` boundary anywhere in the codebase — that is the whole point.
-
-## 3. Circuit lifecycle
-
-Every proxied connection is one circuit, with its own id and its own pair of
-in-memory pipes.
-
-```mermaid
-stateDiagram-v2
-    direction LR
-    [*] --> pending: CreateLimited
-    pending --> open: agent posts status connected
-    pending --> failed: agent posts status failed
-    pending --> closed: OPEN_TIMEOUT elapses, SOCKS replies 0x05
-    open --> closed: WebSocket or either socket ends
-    open --> closed: SOCKS client disconnects
-    open --> closed: DELETE /api/v1/circuits/:id
-    failed --> closed: cleanup
-    closed --> [*]: pruned once stale
-```
-
-Timing that governs those transitions:
-
-| Knob | Default | Bounds |
-|---|---|---|
-| heartbeat interval | 15 s | how fresh node telemetry stays (agent constant) |
-| `NODE_OFFLINE_AFTER` | 45 s | heartbeat age past which a node stops being selectable |
-| `COMMAND_WAIT` | 5 s | how long a control long poll blocks before returning `204` |
-| `OPEN_TIMEOUT` | 45 s | how long the SOCKS handshake waits for the phone to confirm |
-| TCP connect budget | 10 s | phone → destination |
-| status post timeout | 15 s | agent → backend circuit status |
-| control reconnect backoff | 1 s → 15 s | doubling, reset on any success |
-| `IDLE_TIMEOUT` | 2 m | UDP association read deadline |
-| `MAX_CIRCUITS_PER_NODE` | 128 | per-node ceiling, enforced in the registry **and** atomically in the circuit manager |
-| `MAX_BYTES_PER_CIRCUIT` | 1 GiB | combined up/down transfer ceiling |
-
-## 4. How the bytes actually move
-
-A circuit is one authenticated binary WebSocket carrying a full-duplex byte
-stream. TCP bytes pass through unchanged; UDP keeps its two-byte length frames.
-
-```mermaid
-flowchart LR
-    subgraph downdir["down — client to destination"]
-        direction LR
-        D1["client<br/>socket"] --> D2["circuit<br/><b>down pipe</b>"] --> D3["binary WebSocket<br/>server → phone"] --> D4["destination<br/>socket"]
-    end
-
-    subgraph updir["up — destination to client"]
-        direction LR
-        U1["destination<br/>socket"] --> U2["binary WebSocket<br/>phone → server"] --> U3["circuit<br/><b>up pipe</b>"] --> U4["client<br/>socket"]
-    end
-
-    classDef d fill:#16233a,stroke:#7aa2d6,color:#eef4ff
-    classDef u fill:#0f3b33,stroke:#34d3a6,color:#ecfdf5
-    class D1,D2,D3,D4 d
-    class U1,U2,U3,U4 u
-```
-
-Why it is built this way:
-
-- **Nginx upgrades `/agent/` WebSockets** and disables buffering on legacy
-  stream endpoints. SparkTunnel can carry the upgraded connection without the
-  v0.3.0 sustained-response cutoff.
-- Each circuit gets its own WebSocket, so one stalled connection cannot
-  head-of-line block another inside a shared multiplexing layer.
-- Byte counters increment on those pipe writes and surface per circuit in
-  `/api/v1/circuits` and on the dashboard. `/api/v1/metrics` exposes node and
-  circuit *counts* rather than volumes.
-
-## 5. The UDP path
-
-```mermaid
-flowchart LR
-    A["SOCKS5 <b>UDP ASSOCIATE</b><br/>over the authenticated<br/>TCP connection"] --> B["one port taken from<br/>12000-12031, returned<br/>in the SOCKS reply"]
-    B --> C["association locks to the<br/><b>first</b> source endpoint;<br/>one circuit per destination"]
-    C --> D["uint16 length + payload,<br/>over the reliable<br/>WebSocket"]
-    D --> E["sent from a connected<br/>DatagramSocket bound<br/>to the exit Network"]
-    F["TCP control<br/>connection closes"] --> G["association closes,<br/>port returns to the pool,<br/>target circuits close"]
-
-    classDef s fill:#16233a,stroke:#7aa2d6,color:#eef4ff
-    classDef p fill:#0f3b33,stroke:#34d3a6,color:#ecfdf5
-    classDef e fill:#3b1720,stroke:#f0708c,color:#ffeef2
-    class A,B,C,D s
-    class E p
-    class F,G e
-```
-
-Datagram boundaries are preserved with a two-byte big-endian length prefix:
-
-```text
- 0                   1                   2
- 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5
-+-------------------------------+
-|        payload length         |  uint16, network byte order, max 65507
-+-------------------------------+
-|        datagram payload ...   |
-+-------------------------------+
-```
-
-This deliberately rides a **reliable WebSocket** — not QUIC DATAGRAM, not
-MASQUE CONNECT-UDP. Order and delivery are preserved, which suits DNS and
-ordinary low-volume UDP, but real-time media will feel head-of-line delay after
-packet loss.
-
-## 6. Where a destination gets blocked
-
-The ACL is enforced twice, on purpose. The server check sees the *requested*
-host; the phone check sees the *resolved* addresses. That second pass is what
-stops a DNS answer from pointing at the phone's LAN or a metadata endpoint.
-
-```mermaid
-flowchart LR
-    REQ["requested<br/>destination"] --> S1["<b>backend</b><br/>security.ValidateHost<br/>literal IPs + localhost"]
-    S1 -->|"blocked"| X1["SOCKS reply 0x02<br/>not allowed"]
-    S1 -->|"allowed"| S2["<b>phone</b> resolves DNS<br/>on the exit Network"]
-    S2 --> S3["DestinationAcl filters<br/><b>every</b> resolved address"]
-    S3 -->|"nothing<br/>survives"| X2["circuit reports<br/>failed"]
-    S3 -->|"some<br/>remain"| OK["connect in order,<br/>first success wins"]
-
-    classDef bad fill:#3b1720,stroke:#f0708c,color:#ffeef2
-    classDef good fill:#0f3b33,stroke:#34d3a6,color:#ecfdf5
-    classDef mid fill:#16233a,stroke:#7aa2d6,color:#eef4ff
-    class X1,X2 bad
-    class OK good
-    class REQ,S1,S2,S3 mid
-```
-
-<details>
-<summary>Ranges blocked when <code>ALLOW_PRIVATE_DESTINATIONS=false</code> (the default)</summary>
-
-```text
-0.0.0.0/8         10.0.0.0/8        100.64.0.0/10     127.0.0.0/8
-169.254.0.0/16    172.16.0.0/12     192.0.0.0/24      192.0.2.0/24
-192.168.0.0/16    198.18.0.0/15     198.51.100.0/24   203.0.113.0/24
-224.0.0.0/4       240.0.0.0/4
-::/128            ::1/128           fc00::/7          fe80::/10
-ff00::/8          2001:db8::/32
-```
-
-IPv4-mapped and IPv4-compatible IPv6 forms are normalised before matching, so
-`::ffff:127.0.0.1` cannot slip past the IPv4 rules. `localhost` and
-`*.localhost` are rejected by name.
-
-</details>
-
-## 7. Who is allowed to do what
-
-```mermaid
-flowchart TB
-    ADMIN["<b>ADMIN_TOKEN</b><br/>one per deployment"] -->|"Bearer, constant-time compare"| API["/api/v1/* — nodes, circuits, metrics"]
-    SOCKS["<b>SOCKS_USERNAME + SOCKS_PASSWORD</b>"] -->|"RFC 1929 username/password"| PROXY[":1080 CONNECT and UDP ASSOCIATE"]
-    AGENT["<b>one agent token per node id</b><br/>from AGENT_TOKENS_JSON"] -->|"Bearer + the node id must match the token"| EP["/agent/v1/*"]
-    EP --> OWN["circuit ownership check:<br/>circuit.node_id must equal the calling node"]
-    OWN --> STREAM["only then may it upgrade /ws"]
-
-    classDef k fill:#2b2140,stroke:#b18cf0,color:#f5efff
-    classDef s fill:#16233a,stroke:#7aa2d6,color:#eef4ff
-    class ADMIN,SOCKS,AGENT k
-    class API,PROXY,EP,OWN,STREAM s
-```
-
-Token requirements are validated at boot: `ADMIN_TOKEN` 16–4096 bytes,
-`SOCKS_PASSWORD` 16–255 bytes, every agent token 16–4096 bytes, node ids
-restricted to `[A-Za-z0-9._-]{1,64}`. The process refuses to start otherwise.
-
-## 8. Inside the Android agent
-
-```mermaid
-flowchart TB
-    UI["Jetpack Compose UI"] <-->|"StateFlow"| STORE["RuntimeStore"]
-    SVC["<b>ExitNodeService</b><br/>foreground service, persistent notification"] --> STORE
-    SVC --> HB["<b>heartbeat loop</b> — every 15s<br/>POST /agent/v1/heartbeat"]
-    SVC --> CTL["<b>control loop</b> — long poll<br/>GET /agent/v1/control"]
-    CTL -->|"open_tcp / open_udp"| CM["<b>CircuitManager</b><br/>one cancellable coroutine per circuit"]
-    CTL -->|"close"| CM
-    CTL -->|"policy_update"| PREFS["AppPreferences<br/>token sealed with Android Keystore"]
-
-    NM["<b>NetworkMonitor</b><br/>Wi-Fi callback + cellular requestNetwork"] --> SVC
-    NM --> CM
-    CRO["<b>CronetTransport</b><br/>per-request Network binding, HTTP/3 / QUIC"] --> HB
-    CRO --> CTL
-    CRO --> CM
-
-    CM --> TCPS["TCP: network.socketFactory.createSocket<br/>no-delay, keep-alive, 256 KiB buffers"]
-    CM --> UDPS["UDP: network.bindSocket on a DatagramSocket"]
-
-    classDef ui fill:#2b2140,stroke:#b18cf0,color:#f5efff
-    classDef core fill:#0f3b33,stroke:#34d3a6,color:#ecfdf5
-    classDef io fill:#16233a,stroke:#7aa2d6,color:#eef4ff
-    class UI,STORE ui
-    class SVC,CM,NM core
-    class HB,CTL,CRO,TCPS,UDPS,PREFS io
-```
-
-Agent restarts are serialised, so two transports can never run at once. Circuit
-coroutines always report a terminal status (`closed` or `failed`) on their way
-out, even when cancelled, so the backend never keeps a phantom circuit open.
-
----
-
-## Verified on real hardware
-
-The v0.3.0 agent was installed and exercised on all three nodes on 2026-08-10:
-
-| Node | Device | Android network interfaces | Result |
-|---|---|---|---|
-| `s20u` | Galaxy S20 Ultra (`SM-G988B`) | `wlan0` + `rmnet1` | Online; browsing, WSS and download passed |
-| `s22u` | Galaxy S22 Ultra (`SM-S908B`) | `wlan0` + `rmnet0` | Online; browsing, WSS and download passed |
-| `s24u` | Galaxy S24 Ultra (`SM-S928B`) | `wlan0` + `rmnet_data0` | Online; browsing, WSS and download passed |
-
-The same live proxy matrix passed through every phone:
-
-| Check | Result on all three nodes |
-|---|---|
-| Wikipedia summary API | Complete HTTPS response |
-| Open-Meteo forecast API | Complete HTTPS JSON response |
-| GitHub raw README | 33,983 bytes |
-| `wss://echo.websocket.org` | HTTP 101 WebSocket upgrade |
-| Concurrent Hetzner range download | 1,048,576 bytes with matching SHA-256 |
-
-The concurrent 1 MiB downloads completed in 7.0 s on `s20u`, 2.6 s on `s22u`,
-and 10.3 s on `s24u`. Those end-to-end times include connection, container and
-circuit setup, so they are health checks rather than throughput benchmarks. All
-three agents remained online and the backend reported no leaked circuits.
-
-The S20 Ultra also ran an explicit forced-cellular public-IP check:
-
-```bash
-curl --proxy socks5h://proxy.example.com:1080 \
-  --proxy-user 'proxy@s20u!cellular:YOUR_SOCKS_PASSWORD' \
-  http://v4.ident.me
-# [cellular public IPv4 redacted] — the SIM's address, not the Wi-Fi uplink's
-```
-
-These v0.3.0 probes recorded why the circuit transport changed in v0.4.0:
-
-| Probe through `s20u!cellular` | Result | Bytes received | Duration |
-|---|---:|---:|---:|
-| `v4.ident.me` public-IP check | Passed | Complete response | Short request |
-| Hetzner `100MB.bin` | Stream closed | 1,982,208 | 17.16 s |
-| Hetzner `1GB.bin` | Stream closed | 474,878 | 17.11 s |
-
-Both large probes received HTTP 200 before the old paired-HTTP transport ended
-with an unexpected EOF after about 17 seconds. The v0.4.0 WebSocket replacement
-passed two 8.4 MB transfers through a simulated phone and reconnected cleanly.
-Physical-phone v0.4.0 sustained testing is still required before claiming a
-carrier throughput result. See [TEST-REPORT.md](TEST-REPORT.md).
-
----
-
-## Dashboard
-
-One responsive administration page covers fleet status, network validation,
-route policies, battery and traffic telemetry, and live circuits. These v0.3.0
-captures come from the live deployment. The admin token is masked, and the UI
-intentionally omits device IP addresses and DNS servers. No bearer token,
-public IP, circuit id, or destination appears in the repository images.
-
-![PocketExit dashboard showing the real Galaxy S20 Ultra online](docs/images/dashboard-desktop.png)
-
-<details>
-<summary>Mobile layout</summary>
-
-![PocketExit dashboard mobile layout](docs/images/dashboard-mobile.png)
-
-</details>
-
-### Android app
-
-The fixed Overview surface below shows real relayed traffic. Android System UI
-demo mode suppressed personal notification details during capture.
-
-| Galaxy S22 Ultra | Galaxy S24 Ultra |
-|---|---|
-| ![PocketExit v0.3.0 running on a Galaxy S22 Ultra](docs/images/android-s22-ultra.png) | ![PocketExit v0.3.0 running on a Galaxy S24 Ultra](docs/images/android-s24-ultra.png) |
-
-The web dashboard shows online/selectable state, Wi-Fi and cellular validation,
-interface, MTU, metering and estimated link rates, the active control route and
-negotiated HTTP protocol, battery and charging, live circuits with byte
-counters, remote enable/disable and policy selection, and circuit termination.
-The admin token lives only in `sessionStorage`.
-
----
-
-## Quick start
-
-### Prerequisites
-
-- Docker Engine with the Compose plugin, and OpenSSL
-- A DNS name pointing at the server for a real deployment
+## Prerequisites
+
+- Docker Engine with the Compose plugin
+- `openssl` on the host — `scripts/setup.sh`, which `make setup` runs, checks
+  for it and exits before writing anything if it is missing
+- `python3` only to run the test suite (`make test`), not to bring the gateway
+  up
+- A DNS name pointing at the host
 - TCP 80, TCP/UDP 443, TCP 1080 or TLS/TCP 1081, and optional UDP 12000–12031
-- For the app: Android Studio, or JDK 17 plus an SDK with API 36
 
-### 1. Server
+## 1. Bring up the gateway
 
 ```bash
-DOMAIN=proxy.example.com make setup   # writes .env (mode 600) + dev certificates
+git clone https://github.com/CesarPetrescu/PocketExit.git
+cd PocketExit
+DOMAIN=proxy.example.com make setup   # writes .env (mode 600) + development certificates
 $EDITOR .env                          # review the generated credentials
 docker compose up --build -d
 ```
@@ -649,140 +316,142 @@ production trust strategy.
 <details>
 <summary>Production TLS</summary>
 
-Replace `nginx/certs/server.crt` and `nginx/certs/server.key` with a certificate
-and key trusted by Android's system trust store. The Nginx container
-deliberately does not automate ACME issuance, so renewal can be wired into
-whatever certificate workflow the server already runs, without changing
+Replace `nginx/certs/server.crt` and `nginx/certs/server.key` with a
+certificate and key trusted by Android's system trust store. The nginx
+container deliberately does not automate ACME issuance, so renewal can be wired
+into whatever certificate workflow the host already runs without changing
 PocketExit. The release build trusts system CAs only; the debug build also
 accepts user-installed CAs for local testing.
 
 </details>
 
 <details>
-<summary>Optional: PhotonSpark-hosted HTTP endpoint (no inbound firewall rule)</summary>
+<summary>Optional: PhotonSpark-hosted HTTP endpoint, with no inbound firewall rule</summary>
 
-Add the one-time connector token to `.env` as `SPARK_TUNNEL_TOKEN`. The bundled
-connector publishes the dashboard, API and agent heartbeat/control traffic
-through `https://exit.photonspark.ro`.
+Add the one-time connector token to `.env` as `SPARK_TUNNEL_TOKEN`, then:
 
 ```bash
 docker compose --profile tunnel -f docker-compose.yml -f docker-compose.tunnel.yml up --build -d
 ```
 
-SparkTunnel carries the dashboard, API, agent control, and v0.4.0 circuit
-WebSockets. It does **not** publish raw SOCKS5 TCP or UDP relay ports, so clients
-still need direct/VPN access to 1080/1081 and 12000–12031.
+`docker-compose.tunnel.yml` is three lines, and what they do matters: they set
+`ports: !override []` on nginx, the only service in the stack that publishes
+anything. **With that overlay in place the host publishes no ports at all** —
+80, 443 over TCP and UDP, 1080, 1081, and 12000–12031 all disappear from the
+host, not just the SOCKS ones. Everything then arrives through the connector,
+which forwards to nginx's internal plain-HTTP `8081` origin: the dashboard,
+`/api/`, `/agent/`, and the circuit WebSockets. SOCKS5 is not HTTP and does not
+cross the tunnel.
+
+So the overlay on its own gives you a reachable control plane and no way to send
+traffic through it. To keep SOCKS reachable, add a third file that re-publishes
+exactly the ports you want — Compose appends to the emptied list — and pass it
+last:
+
+```yaml
+# docker-compose.socks.yml
+services:
+  nginx:
+    ports:
+      - "1081:1081/tcp"                # TLS-wrapped SOCKS5
+      - "12000-12031:12000-12031/udp"  # only if you need UDP ASSOCIATE
+```
+
+```bash
+docker compose --profile tunnel \
+  -f docker-compose.yml -f docker-compose.tunnel.yml -f docker-compose.socks.yml \
+  up --build -d
+```
+
+Publish to loopback instead (`"127.0.0.1:1081:1081/tcp"`) if the client will
+reach the host over SSH or a VPN rather than from the Internet. Either way,
+confirm what you actually published before opening a firewall:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.tunnel.yml \
+  -f docker-compose.socks.yml config | grep -A4 'ports:'
+```
 
 </details>
 
-### 2. Phones
+## 2. Configure each phone
 
-To build without installing Java, Gradle, or the Android SDK locally:
-
-```bash
-make android-apk
-# Builds one reusable image, removes the build container after the run, and writes:
-# android/app/build/outputs/apk/debug/app-debug.apk
-```
-
-The equivalent direct command is:
-
-```bash
-docker build -t pocketexit-android-builder android
-docker run --rm --user "$(id -u):$(id -g)" \
-  -e HOME=/tmp -e GRADLE_USER_HOME=/tmp/gradle \
-  -v "$PWD/android:/workspace" pocketexit-android-builder
-```
-
-For a native build instead:
-
-```bash
-cd android
-./gradlew testDebugUnitTest lintDebug assembleDebug
-# → android/app/build/outputs/apk/debug/app-debug.apk
-```
-
-Copy the APK to each phone over USB, cloud storage, or a browser download — no
-ADB required — then open it and approve installation from that source. With
-development certificates, also install `nginx/certs/ca.crt` as a user CA and use
-only the debug APK with it.
-
-After a node has registered, the dashboard's **Pair phone** action displays a
-QR. Scan it with Android's normal camera, verify the server and node shown by
-PocketExit, then import. The QR contains that node's bearer token; do not share
-or retain screenshots of it.
-
-`.env` contains `AGENT_TOKENS_JSON={"s20u":"…","s22u":"…","s24u":"…"}`. On each
-phone, enter:
+`make setup` writes `AGENT_TOKENS_JSON={"s20u":"…","s22u":"…","s24u":"…"}` into
+`.env`. Install the APK — either the signed one from the
+[latest release](https://github.com/CesarPetrescu/PocketExit/releases/latest)
+or a debug build from `make android-apk` — then on each phone tap
+**Enter server details manually** on the first-run screen, which opens
+**Settings** with its **Manual setup** card at the top. Fill in the **Server**
+card:
 
 | Field | Example |
 |---|---|
-| Backend URL | `https://proxy.example.com` |
+| Server URL | `https://proxy.example.com` |
 | Node ID | `s20u`, `s22u`, or `s24u` |
-| Agent token | The matching value from `AGENT_TOKENS_JSON` |
-| Control tunnel | Wi-Fi preferred |
-| Proxy exit | Cellular only, or Cellular preferred |
+| Device name | pre-filled with the phone's model; any non-empty label works |
+| Agent token | the matching value from `AGENT_TOKENS_JSON` |
 
-Android can request the cellular transport but cannot pin the modem to 5G NR.
-The carrier may serve LTE when NR is unavailable.
+`Certificate pin` sits under those and is not typed: it reads **Platform
+certificate store** for a server-mode deployment, which is exactly right when
+nginx holds a certificate Android already trusts. Then, in the **Routing** card:
 
-### 3. Use it
+| Field | Example |
+|---|---|
+| Control channel | Wi-Fi preferred |
+| Exit traffic | Cellular only, or Cellular preferred |
+
+Press **Save** — it reads **Save and reconnect** while the node is running.
+
+Or skip the typing: once a node has sent one heartbeat, the dashboard's **Pair phone**
+action on that node renders a `v=1` onboarding QR. Scan it with the phone's
+camera and confirm in the app. That QR contains the node's bearer token — do
+not share or keep screenshots of it.
+
+With development certificates, also install `nginx/certs/ca.crt` as a user CA
+and use only the debug APK with it.
+
+## 3. Send traffic through it
+
+Use `SOCKS_USERNAME` and `SOCKS_PASSWORD` from `.env`:
 
 ```bash
-# automatic node selection
 curl --proxy socks5h://proxy.example.com:1080 \
-     --proxy-user 'proxy:PASSWORD' https://api.ipify.org
-
-# a specific phone
-curl --proxy socks5h://proxy.example.com:1080 \
-     --proxy-user 'proxy@s24u:PASSWORD' https://api.ipify.org
-
-# a specific phone, forced onto its SIM for this circuit only
-curl --proxy socks5h://proxy.example.com:1080 \
-     --proxy-user 'proxy@s24u!cellular:PASSWORD' https://api.ipify.org
+     --proxy-user 'proxy@s20u!cellular:PASSWORD' \
+     https://api.ipify.org
+# → the public IPv4 of the SIM in the phone named s20u
 ```
-
-The username *is* the control surface:
-
-```text
-proxy @ s24u ! cellular
-  │      │        │
-  │      │        └── exit policy, this circuit only
-  │      └─────────── which phone must serve it
-  └────────────────── SOCKS_USERNAME
-```
-
-All four forms are valid: `proxy`, `proxy@NODE_ID`, `proxy!POLICY`,
-`proxy@NODE_ID!POLICY`.
-
-| Alias | Resolves to |
-|---|---|
-| `auto` | `AUTO` |
-| `wifi`, `wifi_only` | `WIFI_ONLY` |
-| `cell`, `cellular`, `lte`, `5g`, `cellular_only` | `CELLULAR_ONLY` |
-| `wifi_preferred` | `WIFI_PREFERRED` |
-| `cellular_preferred`, `cell_preferred` | `CELLULAR_PREFERRED` |
-
-`5g` is only an alias for `CELLULAR_ONLY`. It does not promise the modem is on
-NR rather than LTE.
 
 > [!WARNING]
-> `:1080` is plain SOCKS5 over raw TCP. Restrict it to trusted sources or a VPN.
-> Port `1081` wraps the same SOCKS5 session in TLS for clients using `stunnel`,
-> `gost`, or another local TLS wrapper. Standard `curl --proxy socks5h://...`
-> does not add that outer TLS layer by itself.
-> HTTPS destinations keep their own end-to-end TLS either way, but the SOCKS
-> credentials themselves are exposed to the network path.
+> `:1080` is plain SOCKS5 over raw TCP. Restrict it to trusted sources or a
+> VPN. Port `1081` wraps the same session in TLS for clients using `stunnel`,
+> `gost`, or another local TLS wrapper; `curl --proxy socks5h://…` does not add
+> that outer layer by itself. HTTPS destinations keep their own end-to-end TLS
+> either way, but the SOCKS credentials are exposed to the network path.
 
-A client implementing UDP ASSOCIATE gets one authenticated relay port from
-12000–12031 per association.
+## Ports
 
----
+| Port | Transport | Published | Purpose |
+|---|---|---|---|
+| `80` | TCP | yes | 308 redirect to HTTPS |
+| `443` | TCP | yes | Dashboard, `/api/`, `/agent/` over TLS + HTTP/2 |
+| `443` | UDP | yes | The same, over HTTP/3 / QUIC |
+| `1080` | TCP | yes | Authenticated SOCKS5 (nginx `stream` → backend) |
+| `1081` | TLS/TCP | yes | TLS-wrapped SOCKS5 |
+| `12000–12031` | UDP | yes | SOCKS5 UDP relay pool, one port per association |
+| `8080` | TCP | **no** | Go HTTP API, internal bridge only |
+| `8081` | TCP | **no** | Plain-HTTP origin for the optional SparkTunnel connector |
+
+The **Published** column describes `docker-compose.yml` on its own. Adding
+`docker-compose.tunnel.yml` turns every `yes` in it into a no; see the
+SparkTunnel section above.
 
 ## Configuration
 
-Everything is environment-driven, read once at boot, and validated before the
-listeners open.
+Server mode is environment-driven, read once at boot, and validated before the
+listeners open. The process refuses to start on a bad value.
+
+<details>
+<summary>Every variable</summary>
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -804,96 +473,80 @@ listeners open.
 | `ALLOW_PRIVATE_DESTINATIONS` | `false` | Keep `false` for an Internet exit pool |
 | `LOG_JSON` | `true` | JSON handler when `true`, plain text when `false` |
 | `LOG_LEVEL` | `info` | Set to `debug` for verbose handler logs |
-| `AUDIT_LOG_PATH` | `/data/audit.jsonl` | Durable structured JSONL log on the persistent Docker volume |
+| `AUDIT_LOG_PATH` | `/data/audit.jsonl` | Structured JSONL log on the persistent volume |
 | `SPARK_TUNNEL_TOKEN` | — | Only for the optional `tunnel` Compose profile |
 
----
-
-## API surface
-
-| Method | Path | Auth | Purpose |
-|---|---|---|---|
-| `GET` | `/api/v1/health` | none | Liveness |
-| `GET` | `/api/v1/nodes` | admin | Node inventory with full telemetry |
-| `PATCH` | `/api/v1/nodes/{nodeID}` | admin | Enable/disable, set control and exit policy |
-| `GET` | `/api/v1/nodes/{nodeID}/onboarding` | admin | On-demand agent deep link and QR SVG |
-| `GET` | `/api/v1/circuits` | admin | Circuit inventory |
-| `DELETE` | `/api/v1/circuits/{circuitID}` | admin | Close a circuit |
-| `GET` | `/api/v1/metrics` | admin | Prometheus text metrics |
-| `POST` | `/agent/v1/heartbeat` | node | Register and report telemetry |
-| `GET` | `/agent/v1/control` | node | Long poll for the next command |
-| `POST` | `/agent/v1/circuits/{id}/status` | node | `connected` / `failed` / `closed` |
-| `GET` | `/agent/v1/circuits/{id}/ws` | node | Full-duplex binary WebSocket data plane |
-| `GET` / `POST` | `/agent/v1/circuits/{id}/down` / `up` | node | Legacy v0.3.0 stream compatibility |
-
-A policy `PATCH` is transactional: if the command queue for that node is full,
-the dashboard state is rolled back rather than drifting from the phone.
-Full request and response shapes live in [PROTOCOL.md](PROTOCOL.md).
+</details>
 
 ---
 
-## Repository layout
+# Picking a phone and a radio
+
+Both modes share one control surface: the SOCKS5 username.
 
 ```text
-android/              Android Studio / Gradle project (Kotlin, Compose, Cronet, OkHttp)
-  …/network/          NetworkMonitor · HTTP/WebSocket transports · PolicySelector · ACL
-  …/proxy/            CircuitManager · DatagramCodec
-  …/service/          ExitNodeService foreground service · BootReceiver
-backend/              Go control plane and SOCKS5 proxy
-  internal/proxy/     SOCKS5 CONNECT + UDP ASSOCIATE, selector parsing
-  internal/nodes/     Registry, command queues, scheduler
-  internal/circuit/   Circuit pipes, state, per-node ceiling, pruning
-  internal/security/  Destination ACL
-  internal/httpapi/   Admin and agent HTTP surface
-frontend/             Static dependency-free dashboard
-nginx/                Image, configuration, local certificates
-scripts/              Setup, validation, smoke-test, packaging
-docs/images/          Redacted live dashboard captures
-docker-compose.yml    Complete server deployment
-ARCHITECTURE.md       Component and data-flow design
-PROTOCOL.md           HTTP and circuit protocol
-SECURITY.md           Threat model and deployment checklist
-TEST-REPORT.md        Verification performed for this handoff
+proxy @ s24u ! cellular
+  │      │        │
+  │      │        └── exit policy, this circuit only
+  │      └─────────── which phone must serve it
+  └────────────────── the base username
 ```
+
+All four forms are valid: `proxy`, `proxy@NODE_ID`, `proxy!POLICY`,
+`proxy@NODE_ID!POLICY`. With no node named, the least-loaded eligible phone
+serves the request.
+
+| Alias | Resolves to |
+|---|---|
+| `auto` | `AUTO` |
+| `wifi`, `wifi_only` | `WIFI_ONLY` |
+| `cell`, `cellular`, `lte`, `5g`, `cellular_only` | `CELLULAR_ONLY` |
+| `wifi_preferred` | `WIFI_PREFERRED` |
+| `cellular_preferred`, `cell_preferred` | `CELLULAR_PREFERRED` |
+
+`5g` is only an alias for `CELLULAR_ONLY`. Android can request the cellular
+transport but cannot pin the modem to NR, and the carrier may serve LTE.
+
+A `_ONLY` policy that cannot be satisfied **fails the circuit**. There is no
+implicit fallback across that boundary anywhere in the codebase, so a request
+you forced onto the SIM never quietly leaves over Wi-Fi. A phone whose radio is
+attached but has not passed Android's own `NET_CAPABILITY_VALIDATED` check — a
+captive portal, say — is not selectable for that policy.
+
+A client implementing UDP ASSOCIATE gets one authenticated relay port from the
+pool per association.
 
 ---
 
-## Tests
+# What this is not
 
-```bash
-make test          # Go unit + race + coverage, backend smoke, frontend syntax, YAML/XML/shell checks
-make test-android  # Gradle unit tests, lint, debug APK
-make test-docker   # Compose build, startup, health check, nginx -t
-make test-live     # Real HTTP/HTTPS/download/Git/WSS/security checks through every phone
-```
-
-CI runs all three groups on every push and pull request, and uploads the debug
-APK as a build artifact. `test-live` is intentionally manual: it requires the
-ignored `.env`, the running Compose deployment, and online physical phones. It
-never prints proxy credentials or the cellular public addresses it validates.
-Tag pushes run the signed-release workflow and publish checksummed APKs plus
-backend, Nginx, and Android-builder images to GHCR. Configure the four
-repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,
-`ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD` before creating a release tag.
-For PKCS#12 stores, use the same store and key password; JKS supports distinct
-passwords. The tag must match `versionName`, for example `v0.4.0`.
-Back up the signing keystore and passwords in a secure location: losing them
-prevents future updates from being accepted over an installed release APK.
-
----
-
-## Limits, stated plainly
-
-- **State is in memory.** Restarting the backend clears node records and circuit
-  history. Phones re-register on their next heartbeat.
+- **Not a VPN.** Nothing is routed automatically. Only the applications you
+  point at the SOCKS proxy use it, and an application that ignores proxy
+  settings will ignore this one.
+- **It does not hide your traffic from the carrier.** The last hop leaves the
+  phone's SIM in the clear beyond whatever end-to-end encryption the client
+  already had. The carrier sees the destinations.
+- **It is not anonymity.** The exit address belongs to a SIM registered to you.
+  A destination sees a mobile IP, and your carrier can connect it back.
+- **Exit bandwidth is one phone's uplink**, shared by every circuit on that
+  phone, and metered by whatever plan the SIM is on.
+- **A compromised laptop holds everything.** In personal mode `~/.pocketexit`
+  contains the TLS private key, the admin token, the SOCKS password, and every
+  paired phone's agent token. There is no second factor.
+- **Anyone who can see the screen during pairing can pair a phone.** The window
+  is 10 minutes and the code is single-use, but that is the whole defence.
+- **State is in memory.** Restarting the backend clears node records and
+  circuit history. Phones re-register on their next heartbeat; in personal mode
+  their tokens survive in `state.json`, and any outstanding pairing code does
+  not.
 - **Circuits do not survive a control-network change.** They close; the agent
   reconnects and accepts new ones.
 - **UDP is length-framed over a reliable WebSocket**, not QUIC DATAGRAM or
-  MASQUE. Order and delivery hold, but loss adds head-of-line latency.
+  MASQUE. Order and delivery hold, but loss adds head-of-line latency, so
+  real-time media will feel it.
 - **The UDP relay pool has a first-packet race.** A port is created only after
   an authenticated `UDP ASSOCIATE` and locks to the first source endpoint it
-  sees, but the port range is fixed and public. Firewall 12000–12031 to trusted
-  clients, or do not publish it when UDP is unnecessary.
+  sees, but the range is fixed. Firewall it, or do not publish it.
 - **OEM battery management can still kill the foreground service.** Exempting
   the app from battery optimisation is a manual step in device settings.
 - **HTTP/3 is opportunistic.** A path blocking UDP 443 falls back to HTTPS over
@@ -908,12 +561,112 @@ Read [SECURITY.md](SECURITY.md) before exposing any of this to the Internet.
 
 ---
 
-## License
+# How it works
+
+Two routes are decided separately and re-decided per circuit: the *control*
+route carrying heartbeats, commands, and circuit WebSockets, and the *exit*
+route carrying DNS and the destination socket. `NetworkMonitor` keeps both
+radios alive at once — `requestNetwork` on cellular holds a usable `Network`
+handle while Android keeps Wi-Fi as the system default — so the process is
+never globally bound and one phone can carry control over Wi-Fi while its
+traffic leaves over the SIM.
+
+Every proxied connection is one circuit with its own id, its own pair of
+in-memory pipes, and its own authenticated binary WebSocket. The SOCKS success
+reply is never optimistic: the handshake blocks until the phone reports an
+established socket to the destination.
+
+| Document | What is in it |
+|---|---|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Components, the two planes, circuit lifecycle, both data paths, where a destination gets blocked, timing constants |
+| [PROTOCOL.md](PROTOCOL.md) | Wire formats: agent endpoints, admin endpoints, pairing, the circuit WebSocket |
+| [docs/pairing-protocol.md](docs/pairing-protocol.md) | The binding personal-mode contract: certificate, pin, code, URI, claim, threat model |
+| [SECURITY.md](SECURITY.md) | Threat model and deployment checklist |
+| [TEST-REPORT.md](TEST-REPORT.md) | What has been verified, and when |
+
+## What the phone looks like
+
+<details>
+<summary>App screenshots, PocketExit v0.3.0</summary>
+
+These captures predate the pairing rebuild: they show the v0.3.0 overview
+surface relaying real traffic, not the current pairing-first UI. Android System
+UI demo mode suppressed personal notification details during capture.
+
+| Galaxy S22 Ultra | Galaxy S24 Ultra |
+|---|---|
+| ![PocketExit v0.3.0 on a Galaxy S22 Ultra](docs/images/android-s22-ultra.png) | ![PocketExit v0.3.0 on a Galaxy S24 Ultra](docs/images/android-s24-ultra.png) |
+
+</details>
+
+<details>
+<summary>Dashboard, mobile layout</summary>
+
+![The PocketExit dashboard on a narrow screen](docs/images/dashboard-mobile.png)
+
+</details>
+
+---
+
+# Repository layout
+
+```text
+android/              Gradle project (Kotlin, Compose, Cronet, OkHttp)
+  …/network/          NetworkMonitor · transports · PolicySelector · PinnedTrust · PairingClient
+  …/proxy/            CircuitManager · DatagramCodec
+  …/service/          ExitNodeService foreground service · BootReceiver
+  …/ui/               Pairing screens and sheets, home, settings
+backend/              Go control plane and SOCKS5 proxy
+  cmd/server/         Entry point: a bare run is server mode, "personal" is the other
+  internal/personal/  State directory, certificate and pin, pairing codes, minted tokens
+  internal/proxy/     SOCKS5 CONNECT + UDP ASSOCIATE, selector parsing
+  internal/nodes/     Registry, command queues, scheduler
+  internal/circuit/   Circuit pipes, state, per-node ceiling, pruning
+  internal/security/  Destination ACL
+  internal/httpapi/   Admin, agent, and pairing HTTP surface
+frontend/             Static dependency-free dashboard, served by nginx or by the binary
+nginx/                Image, configuration, local certificates
+scripts/              Setup, validation, smoke-test, packaging
+.github/e2e/          Process-level end-to-end tests CI runs on every push
+docs/images/          Redacted live captures
+docker-compose.yml    Complete server deployment
+```
+
+# Tests
+
+```bash
+make test          # Go unit + race + coverage, backend smoke, frontend syntax, YAML/XML/shell checks
+make test-android  # Gradle unit tests, lint, debug APK
+make test-docker   # Compose build, startup, health check, nginx -t
+make test-live     # Real HTTP/HTTPS/download/Git/WSS/security checks through every phone
+```
+
+The two process-level end-to-end tests can also be run directly:
+
+```bash
+./.github/e2e/personal-smoke.sh    # pair a simulated phone over a self-signed certificate, then unpair it
+python3 .github/e2e/socks-e2e.py   # drive TCP and UDP through the proxy with a simulated phone
+```
+
+CI runs the Go, smoke, end-to-end, Android, and Compose jobs on every push and
+pull request, holds Go coverage above a floor, and uploads the debug APK as a
+build artifact. `test-live` is intentionally manual: it needs the ignored
+`.env`, a running deployment, and online physical phones, and it never prints
+proxy credentials or the cellular addresses it validates.
+
+Tag pushes run the release workflow, which checks the tag against `versionName`
+in `android/app/build.gradle.kts`, publishes a signed checksummed APK, and
+pushes backend, nginx, and Android-builder images to GHCR. It needs the four
+repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,
+`ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. Back up the signing keystore:
+losing it prevents future updates from installing over a released APK.
+
+# License
 
 Copyright © 2026 Cesar Petrescu.
 
 PocketExit is free software licensed under the
-[GNU Affero General Public License v3.0 or later](LICENSE). You may use, copy,
-modify, and redistribute it under that license. Redistributed versions must
-keep the copyright and license notices, and modified versions offered to users
-over a network must offer their corresponding source code. See [NOTICE](NOTICE).
+[GNU Affero General Public License v3.0 or later](LICENSE). Redistributed
+versions must keep the copyright and license notices, and modified versions
+offered to users over a network must offer their corresponding source code. See
+[NOTICE](NOTICE).

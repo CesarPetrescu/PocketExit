@@ -1,0 +1,26 @@
+# YAML rules for the Compose files and the workflows. The repository's YAML is
+# hand-written and read by people, so this checks the things that silently
+# change meaning - duplicate keys, tabs, unquoted octal-looking values, "on"
+# read as a boolean - and leaves formatting alone.
+extends: default
+
+rules:
+  # GitHub workflow steps and Compose commands are naturally long, and wrapping
+  # them would hurt more than it helps.
+  line-length: disable
+  # "on:" in a workflow is a key, not the boolean true.
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1
+  document-start: disable
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
+  braces:
+    max-spaces-inside: 1
+  brackets:
+    max-spaces-inside: 1
+  # Duplicate keys and tabs are always mistakes.
+  key-duplicates: enable

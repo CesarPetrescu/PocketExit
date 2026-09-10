@@ -12,18 +12,33 @@ import org.chromium.net.UploadDataProvider
 import org.chromium.net.UploadDataSink
 import org.chromium.net.UrlRequest
 import org.chromium.net.UrlResponseInfo
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.MediaType
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okio.BufferedSink
+import okio.source
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.net.URI
 import java.nio.ByteBuffer
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class CronetTransport(
     context: Context,
     private val serverUrl: String,
+    private val pin: String = "",
 ) : AutoCloseable {
     data class HttpResponse(
         val status: Int,
@@ -34,10 +49,10 @@ class CronetTransport(
     }
 
     class RunningRequest internal constructor(
-        private val request: UrlRequest,
+        private val cancellation: () -> Unit,
         val completion: CompletableDeferred<HttpResponse>,
     ) {
-        fun cancel() = request.cancel()
+        fun cancel() = cancellation()
     }
 
     class HttpStatusException(
@@ -51,9 +66,14 @@ class CronetTransport(
     private val uploadExecutor: ExecutorService = Executors.newCachedThreadPool { runnable ->
         Thread(runnable, "pocket-exit-upload").apply { isDaemon = true }
     }
-    private val engine: CronetEngine
+    private val pinnedClients = ConcurrentHashMap<Long, OkHttpClient>()
 
-    init {
+    // Cronet builds a chain against the platform trust store and cannot be told
+    // to trust a bare public key, so a pinned personal-mode server is served by
+    // OkHttp with the pinned trust manager and the engine is never built.
+    private val engine: CronetEngine? = if (pin.isNotBlank()) {
+        null
+    } else {
         val builder = CronetEngine.Builder(context.applicationContext)
             .enableHttp2(true)
             .enableQuic(true)
@@ -67,7 +87,7 @@ class CronetTransport(
             val host = requireNotNull(uri.host) { "Server URL must have a host" }
             builder.addQuicHint(host, port, port)
         }
-        engine = builder.build()
+        builder.build()
     }
 
     suspend fun request(
@@ -78,13 +98,13 @@ class CronetTransport(
         body: ByteArray? = null,
         contentType: String = "application/json",
     ): HttpResponse {
-        val provider = body?.let(::ByteArrayProvider)
         val running = start(
             method = method,
             path = path,
             token = token,
             network = network,
-            uploadProvider = provider,
+            body = body,
+            source = null,
             contentType = contentType,
             responseConsumer = null,
         )
@@ -107,7 +127,8 @@ class CronetTransport(
         path = path,
         token = token,
         network = network,
-        uploadProvider = null,
+        body = null,
+        source = null,
         contentType = "application/octet-stream",
         responseConsumer = onBytes,
     )
@@ -122,7 +143,8 @@ class CronetTransport(
         path = path,
         token = token,
         network = network,
-        uploadProvider = InputStreamProvider(source),
+        body = null,
+        source = source,
         contentType = "application/octet-stream",
         responseConsumer = null,
     )
@@ -132,13 +154,29 @@ class CronetTransport(
         path: String,
         token: String,
         network: Network,
-        uploadProvider: UploadDataProvider?,
+        body: ByteArray?,
+        source: InputStream?,
         contentType: String,
         responseConsumer: ((ByteArray) -> Unit)?,
     ): RunningRequest {
+        val url = serverUrl.trimEnd('/') + if (path.startsWith('/')) path else "/$path"
+        val engine = this.engine ?: return startPinned(
+            method = method,
+            url = url,
+            token = token,
+            network = network,
+            body = body,
+            source = source,
+            contentType = contentType,
+            responseConsumer = responseConsumer,
+        )
         val completion = CompletableDeferred<HttpResponse>()
         val callback = StreamingCallback(completion, responseConsumer)
-        val url = serverUrl.trimEnd('/') + if (path.startsWith('/')) path else "/$path"
+        val uploadProvider: UploadDataProvider? = when {
+            body != null -> ByteArrayProvider(body)
+            source != null -> InputStreamProvider(source)
+            else -> null
+        }
         val builder = engine.newUrlRequestBuilder(url, callback, callbackExecutor)
             .setHttpMethod(method)
             .disableCache()
@@ -156,12 +194,109 @@ class CronetTransport(
 
         val request = experimental.build()
         request.start()
-        return RunningRequest(request, completion)
+        return RunningRequest({ request.cancel() }, completion)
     }
+
+    // The pinned path mirrors the Cronet one: the same headers, the same
+    // per-Network binding, the same streaming semantics. It gives up HTTP/3,
+    // which is the price of trusting a bare public key.
+    private fun startPinned(
+        method: String,
+        url: String,
+        token: String,
+        network: Network,
+        body: ByteArray?,
+        source: InputStream?,
+        contentType: String,
+        responseConsumer: ((ByteArray) -> Unit)?,
+    ): RunningRequest {
+        val completion = CompletableDeferred<HttpResponse>()
+        val mediaType = contentType.toMediaType()
+        val verb = method.uppercase(Locale.US)
+        val payload: RequestBody? = when {
+            body != null -> body.toRequestBody(mediaType)
+            source != null -> StreamBody(source, mediaType)
+            // OkHttp rejects a bodyless POST or PUT, and Cronet allows one.
+            verb == "GET" || verb == "HEAD" -> null
+            else -> ByteArray(0).toRequestBody(mediaType)
+        }
+        val request = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer $token")
+            .header("Accept", "application/json, application/octet-stream")
+            .header("Cache-Control", "no-store")
+            .method(verb, payload)
+            .build()
+        val call = pinnedClient(network).newCall(request)
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                completion.completeExceptionally(e)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                try {
+                    response.use { deliver(it, responseConsumer, completion) }
+                } catch (error: Throwable) {
+                    completion.completeExceptionally(error)
+                }
+            }
+        })
+        completion.invokeOnCompletion { error -> if (error != null) call.cancel() }
+        return RunningRequest({ call.cancel() }, completion)
+    }
+
+    private fun deliver(
+        response: Response,
+        responseConsumer: ((ByteArray) -> Unit)?,
+        completion: CompletableDeferred<HttpResponse>,
+    ) {
+        val status = response.code
+        val protocol = response.protocol.toString()
+        RuntimeStore.update { it.copy(negotiatedProtocol = protocol) }
+        if (status !in 200..299) {
+            val message = response.peekBody(MAX_BUFFERED_BODY_BYTES.toLong()).string()
+            completion.completeExceptionally(HttpStatusException(status, message))
+            return
+        }
+        if (responseConsumer == null) {
+            val bytes = response.peekBody(MAX_BUFFERED_BODY_BYTES.toLong()).bytes()
+            completion.complete(HttpResponse(status, bytes, protocol))
+            return
+        }
+        val stream = response.body.byteStream()
+        val chunk = ByteArray(64 * 1024)
+        while (true) {
+            val read = stream.read(chunk)
+            if (read < 0) break
+            if (read > 0) responseConsumer(chunk.copyOf(read))
+        }
+        completion.complete(HttpResponse(status, ByteArray(0), protocol))
+    }
+
+    // The control long-poll holds a response open for up to a minute, so the
+    // read timeout is left off and callers bound the request themselves.
+    private fun pinnedClient(network: Network): OkHttpClient =
+        pinnedClients.computeIfAbsent(network.networkHandle) {
+            PinnedTrust.applyPin(
+                OkHttpClient.Builder()
+                    .socketFactory(network.socketFactory)
+                    .dns { hostname -> network.getAllByName(hostname).toList() }
+                    .connectTimeout(15, TimeUnit.SECONDS)
+                    .readTimeout(0, TimeUnit.MILLISECONDS)
+                    .writeTimeout(0, TimeUnit.MILLISECONDS)
+                    .retryOnConnectionFailure(true),
+                pin,
+            ).build()
+        }
 
     override fun close() {
         try {
-            runCatching { engine.shutdown() }
+            runCatching { engine?.shutdown() }
+            pinnedClients.values.forEach { client ->
+                client.dispatcher.executorService.shutdown()
+                client.connectionPool.evictAll()
+            }
+            pinnedClients.clear()
         } finally {
             callbackExecutor.shutdownNow()
             uploadExecutor.shutdownNow()
@@ -298,6 +433,20 @@ class CronetTransport(
 
         override fun close() {
             // The circuit owns the socket/input stream and closes it during cancellation.
+        }
+    }
+
+    private class StreamBody(
+        private val source: InputStream,
+        private val mediaType: MediaType,
+    ) : RequestBody() {
+        override fun contentType(): MediaType = mediaType
+
+        // Length is unknown, so OkHttp streams it chunked, as Cronet does.
+        override fun contentLength(): Long = -1L
+
+        override fun writeTo(sink: BufferedSink) {
+            source.source().use(sink::writeAll)
         }
     }
 

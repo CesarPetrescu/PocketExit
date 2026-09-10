@@ -2,57 +2,539 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
+# Read-only by default. Only the change detector widens it, and only to read
+# the pull request it is filtering against.
 permissions:
   contents: read
 
+# A pull request only ever needs its newest run. Pushes to main are left to
+# finish so the default branch keeps a complete history of results.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  backend-and-source:
+  # ---------------------------------------------------------------------
+  # Which halves of the repository this change touches. Everything cheap runs
+  # unconditionally; only the jobs that cost minutes are filtered.
+  # ---------------------------------------------------------------------
+  changes:
+    name: Detect changes
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      android: ${{ steps.filter.outputs.android }}
+      deployment: ${{ steps.filter.outputs.deployment }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - id: filter
+        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - '.golangci.yml'
+              - 'scripts/smoke-backend.sh'
+              - '.github/e2e/**'
+              - '.github/workflows/ci.yml'
+            android:
+              - 'android/**'
+              - '.github/workflows/ci.yml'
+            deployment:
+              - 'backend/**'
+              - 'frontend/**'
+              - 'nginx/**'
+              - 'spark-tunnel/**'
+              - 'docker-compose*.yml'
+              - 'scripts/setup.sh'
+              - 'scripts/gen-dev-certs.sh'
+              - 'scripts/check-compose.py'
+              - '.github/workflows/ci.yml'
+
+  # ---------------------------------------------------------------------
+  # Cheap checks. These finish in under a minute and gate nothing, so they
+  # give a verdict long before the container jobs are done.
+  # ---------------------------------------------------------------------
+  go-lint:
+    name: Go lint
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: backend/go.mod
-          cache: false
-      - uses: actions/setup-node@v6
+          cache-dependency-path: backend/go.sum
+      - name: gofmt
+        working-directory: backend
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+      - name: go vet
+        working-directory: backend
+        run: go vet ./...
+      - name: go mod tidy is a no-op
+        working-directory: backend
+        run: |
+          go mod tidy
+          if ! git diff --exit-code -- go.mod go.sum; then
+            echo "go.mod or go.sum drifted; run 'go mod tidy' in backend/." >&2
+            exit 1
+          fi
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.5.0
+          # The config is at the repository root; golangci-lint finds it by
+          # walking up from backend/, which also lets the action's schema
+          # verification locate it.
+          working-directory: backend
+          args: --timeout=5m
+
+  go-test:
+    name: Go tests
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Measured on 2026-09-09: -race runs land between 63.9% and 65.0%
+      # depending on which timing-sensitive branches execute. The floor sits
+      # just under the low end so it ratchets upward instead of flapping.
+      COVERAGE_FLOOR: "62.0"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: go test -race with coverage
+        working-directory: backend
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Coverage floor
+        working-directory: backend
+        run: |
+          go tool cover -func=coverage.out | tail -20
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ { print $3 }' | tr -d '%')
+          echo "total coverage: $total% (floor $COVERAGE_FLOOR%)" >> "$GITHUB_STEP_SUMMARY"
+          awk -v total="$total" -v floor="$COVERAGE_FLOOR" \
+            'BEGIN { exit !(total + 0 >= floor + 0) }' || {
+              echo "coverage $total% is below the floor of $COVERAGE_FLOOR%" >&2
+              exit 1
+            }
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: go-coverage
+          path: backend/coverage.out
+          if-no-files-found: warn
+
+  smoke:
+    name: Process smoke tests
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Server mode
+        run: ./scripts/smoke-backend.sh
+      - name: Personal mode
+        run: ./.github/e2e/personal-smoke.sh
+
+  end-to-end:
+    name: SOCKS5 end-to-end
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Drive TCP and UDP through the proxy
+        run: python3 .github/e2e/socks-e2e.py
+
+  vulnerabilities:
+    name: govulncheck
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          # Deliberately not go-version-file: the go directive pins 1.23.0,
+          # and scanning against a toolchain that old reports every standard
+          # library advisory fixed since. The current release is what a
+          # release build actually uses.
+          go-version: stable
+          cache-dependency-path: backend/go.sum
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+      - name: Scan
+        id: scan
+        # Report-only: the standard library advisories that land between Go
+        # patch releases would otherwise block unrelated pull requests. The
+        # findings are in the log and in the job summary.
+        continue-on-error: true
+        working-directory: backend
+        run: |
+          set -o pipefail
+          "$(go env GOPATH)/bin/govulncheck" ./... 2>&1 \
+            | tee "$RUNNER_TEMP/govulncheck.txt"
+      - name: Summarise
+        if: always()
+        env:
+          OUTCOME: ${{ steps.scan.outcome }}
+        run: |
+          {
+            echo '### govulncheck'
+            echo
+            if [ "$OUTCOME" = "success" ]; then
+              echo 'No called vulnerabilities.'
+            else
+              echo 'Findings below. This check reports and does not block.'
+            fi
+            echo
+            echo '```'
+            tail -c 40000 "$RUNNER_TEMP/govulncheck.txt" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  source-checks:
+    name: Source, YAML and frontend checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
-      - name: Core tests
-        run: ./scripts/test.sh
-
-  android:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Build Android toolchain image
-        run: docker build -t pocketexit-android-builder android
-      - name: Verify, lint, and build Android in container
+      # check-compose.py and parse-documents.py import yaml. The runner image
+      # carries PyYAML today only as a transitive dependency of something else,
+      # so it is pinned here in a virtualenv the same way yamllint and zizmor
+      # are below.
+      - name: PyYAML
         run: |
+          python3 -m venv "$RUNNER_TEMP/pyyaml"
+          "$RUNNER_TEMP/pyyaml/bin/pip" install --quiet PyYAML==6.0.3
+      - name: Repository policy checks
+        run: |
+          "$RUNNER_TEMP/pyyaml/bin/python" scripts/check-compose.py
+          python3 scripts/verify-source.py
+      - name: Parse every YAML and Android XML document
+        run: |
+          "$RUNNER_TEMP/pyyaml/bin/python" .github/e2e/parse-documents.py
+      - name: Frontend syntax
+        run: node --check frontend/app.js
+      - name: Frontend lint
+        run: |
+          npx --yes eslint@10.10.0 --no-config-lookup \
+            --config .github/linters/eslint.config.mjs frontend
+      - name: yamllint
+        run: |
+          python3 -m venv "$RUNNER_TEMP/yamllint"
+          "$RUNNER_TEMP/yamllint/bin/pip" install --quiet yamllint==1.38.0
+          "$RUNNER_TEMP/yamllint/bin/yamllint" -c .github/linters/yamllint.yml -s \
+            docker-compose.yml docker-compose.tunnel.yml .github
+
+  shell:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check every shell script
+        # SC1007 is excluded because "CDPATH= cd -- ..." is a prefix
+        # assignment on a command, which is the intended idiom throughout, not
+        # a mistyped empty assignment.
+        run: |
+          shellcheck --version
+          # shellcheck disable=SC2046
+          shellcheck --severity=warning --exclude=SC1007 \
+            $(git ls-files '*.sh') android/gradlew
+      - name: Report style-level findings
+        continue-on-error: true
+        run: |
+          # shellcheck disable=SC2046
+          shellcheck --severity=style --exclude=SC1007,SC1091 \
+            $(git ls-files '*.sh') android/gradlew
+
+  workflows:
+    name: Workflow lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: stable
+          cache: false
+      - name: actionlint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" -color
+      - name: zizmor
+        env:
+          # zizmor resolves action references against the GitHub API to spot
+          # ref confusion; without a token it is rate limited to nothing.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zizmor"
+          "$RUNNER_TEMP/zizmor/bin/pip" install --quiet zizmor==1.30.1
+          "$RUNNER_TEMP/zizmor/bin/zizmor" --persona=regular \
+            --min-severity=medium .github/workflows
+
+  dockerfiles:
+    name: hadolint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      # One job rather than a matrix: the action is a container action, so
+      # keeping the four Dockerfiles in the same job builds its image once.
+      - name: backend/Dockerfile
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: backend/Dockerfile
+          config: .github/linters/hadolint.yaml
+          output-file: hadolint-backend.txt
+          failure-threshold: error
+          format: tty
+          no-fail: false
+      - name: nginx/Dockerfile
+        if: always()
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: nginx/Dockerfile
+          config: .github/linters/hadolint.yaml
+          output-file: hadolint-nginx.txt
+          failure-threshold: error
+          format: tty
+          no-fail: false
+      - name: android/Dockerfile
+        if: always()
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: android/Dockerfile
+          config: .github/linters/hadolint.yaml
+          output-file: hadolint-android.txt
+          failure-threshold: error
+          format: tty
+          no-fail: false
+      - name: spark-tunnel/Dockerfile
+        if: always()
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: spark-tunnel/Dockerfile
+          config: .github/linters/hadolint.yaml
+          output-file: hadolint-spark-tunnel.txt
+          failure-threshold: error
+          format: tty
+          no-fail: false
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo '### hadolint'
+            echo
+            echo 'Warnings and info are reported, not enforced; see'
+            echo '.github/linters/hadolint.yaml for why.'
+            for report in hadolint-*.txt; do
+              [ -e "$report" ] || continue
+              echo
+              echo "#### $report"
+              echo '```'
+              cat "$report"
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          # gitleaks walks history, so it needs all of it.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: stable
+          cache: false
+      - name: gitleaks
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@v8.30.1
+          "$(go env GOPATH)/bin/gitleaks" git --no-banner --redact --verbose \
+            --config .github/linters/gitleaks.toml .
+
+  # ---------------------------------------------------------------------
+  # The expensive jobs. Both are path filtered.
+  # ---------------------------------------------------------------------
+  android:
+    name: Android
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Restore the Gradle home
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: .gradle-home
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle.properties', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+      - name: Build the Android toolchain image
+        run: docker build -t pocketexit-android-builder android
+      - name: Verify, lint, and build Android in the container
+        run: |
+          mkdir -p .gradle-home
           docker run --rm --user "$(id -u):$(id -g)" \
-            -e HOME=/tmp -e GRADLE_USER_HOME=/tmp/gradle \
+            -e HOME=/tmp -e GRADLE_USER_HOME=/gradle \
             -v "$PWD/android:/workspace" \
+            -v "$PWD/.gradle-home:/gradle" \
             pocketexit-android-builder testDebugUnitTest lintDebug assembleDebug
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: pocket-exit-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: failure()
+        with:
+          name: android-reports
+          path: |
+            android/app/build/reports/**
+            android/app/build/outputs/logs/**
+          if-no-files-found: ignore
 
   compose:
+    name: Compose gateway
+    needs: changes
+    if: needs.changes.outputs.deployment == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       - name: Generate configuration
         run: ./scripts/setup.sh localhost
       - name: Validate and build
         run: |
           docker compose config >/dev/null
           docker compose build
-      - name: Start and test gateway
+      - name: Scan the built images
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        # Report-only: base image advisories arrive on their own schedule and
+        # must not block a change that did not introduce them.
+        continue-on-error: true
+        with:
+          scan-type: image
+          image-ref: pocketexit-backend:latest
+          format: table
+          output: trivy-backend.txt
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+      - name: Scan the gateway image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        continue-on-error: true
+        with:
+          scan-type: image
+          image-ref: pocketexit-nginx:latest
+          format: table
+          output: trivy-nginx.txt
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+      - name: Summarise the image scans
+        if: always()
         run: |
-          docker compose up -d
+          {
+            echo '### Trivy'
+            for report in trivy-backend.txt trivy-nginx.txt; do
+              echo
+              echo "#### $report"
+              echo '```'
+              cat "$report" 2>/dev/null || echo 'no report produced'
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: trivy-reports
+          path: trivy-*.txt
+          if-no-files-found: ignore
+      - name: Start the stack
+        run: docker compose up -d
+      - name: Validate the nginx configuration
+        # nginx only starts once the backend reports healthy, and the backend's
+        # HEALTHCHECK first fires at 15s, so this waits well past that before
+        # calling a missing container a configuration failure.
+        run: |
+          for attempt in $(seq 1 90); do
+            if docker compose exec -T nginx nginx -t; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 90 ]; then
+              echo "nginx never accepted its configuration" >&2
+              docker compose logs
+              exit 1
+            fi
+            sleep 1
+          done
+      - name: Test the gateway
+        run: |
           for attempt in $(seq 1 60); do
             if curl -kfsS https://127.0.0.1/api/v1/health >/dev/null; then
               break
@@ -63,10 +545,54 @@ jobs:
             fi
             sleep 1
           done
-          docker compose exec -T nginx nginx -t
+          curl -kfsS https://127.0.0.1/ | grep -q '<title>'
       - name: Logs on failure
         if: failure()
         run: docker compose logs
       - name: Stop services
         if: always()
         run: docker compose down -v
+
+  # ---------------------------------------------------------------------
+  # The one required check. It is green when every job either passed or was
+  # filtered out, so a docs-only pull request is not blocked by an APK build
+  # that never needed to run.
+  # ---------------------------------------------------------------------
+  ci:
+    name: CI
+    if: ${{ !cancelled() }}
+    needs:
+      - changes
+      - go-lint
+      - go-test
+      - smoke
+      - end-to-end
+      - vulnerabilities
+      - source-checks
+      - shell
+      - workflows
+      - dockerfiles
+      - secrets
+      - android
+      - compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Collect job results
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+
+          results = json.loads(os.environ["RESULTS"])
+          failed = sorted(
+              name for name, job in results.items()
+              if job["result"] not in ("success", "skipped")
+          )
+          for name, job in sorted(results.items()):
+              print(f"{job['result']:>10}  {name}")
+          if failed:
+              print("failed jobs: " + ", ".join(failed), file=sys.stderr)
+              sys.exit(1)
+          PY

@@ -22,6 +22,7 @@ import com.photonspark.pocketexit.data.NetworkKind
 import com.photonspark.pocketexit.data.RuntimeStore
 import com.photonspark.pocketexit.network.CronetTransport
 import com.photonspark.pocketexit.network.NetworkMonitor
+import com.photonspark.pocketexit.network.PolicySelector
 import com.photonspark.pocketexit.network.WebSocketTransport
 import com.photonspark.pocketexit.proxy.CircuitManager
 import com.photonspark.pocketexit.ui.MainActivity
@@ -68,16 +69,16 @@ class ExitNodeService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 preferences.setEnabled(false)
-                stopAgent("Stopped by user")
+                stopAgent(getString(R.string.status_stopped_by_user))
                 return START_NOT_STICKY
             }
-            ACTION_RESTART -> startForegroundNow("Restarting")
-            else -> startForegroundNow("Starting")
+            ACTION_RESTART -> startForegroundNow(getString(R.string.notification_restarting))
+            else -> startForegroundNow(getString(R.string.notification_starting))
         }
 
         val config = preferences.current
         if (!config.enabled) {
-            stopAgent("Agent disabled")
+            stopAgent(getString(R.string.status_agent_disabled))
             return START_NOT_STICKY
         }
         restartAgent()
@@ -89,7 +90,7 @@ class ExitNodeService : Service() {
         networkMonitor.stop()
         preferences.close()
         serviceScope.cancel()
-        RuntimeStore.reset("Stopped")
+        RuntimeStore.reset(getString(R.string.status_stopped))
         super.onDestroy()
     }
 
@@ -107,18 +108,30 @@ class ExitNodeService : Service() {
         val initialConfig = preferences.current
         initialConfig.validationError()?.let { error ->
             RuntimeStore.update { it.copy(running = false, statusMessage = error, lastError = error) }
-            updateNotification(error)
+            updateNotification(getString(R.string.notification_not_configured, error))
             stopSelf()
             return@coroutineScope
         }
 
-        val transport = CronetTransport(this@ExitNodeService, initialConfig.normalizedServerUrl)
-        val socketTransport = WebSocketTransport(initialConfig.normalizedServerUrl)
+        // A personal-mode server is authenticated by the pin the phone stored at
+        // pairing; an empty pin leaves platform validation in charge, as in
+        // server mode.
+        val transport = CronetTransport(
+            this@ExitNodeService,
+            initialConfig.normalizedServerUrl,
+            initialConfig.pin,
+        )
+        val socketTransport = WebSocketTransport(initialConfig.normalizedServerUrl, initialConfig.pin)
         val circuits = CircuitManager(this, preferences, networkMonitor, transport, socketTransport)
         RuntimeStore.update {
-            it.copy(running = true, registered = false, statusMessage = "Connecting", lastError = "")
+            it.copy(
+                running = true,
+                registered = false,
+                statusMessage = getString(R.string.status_connecting),
+                lastError = "",
+            )
         }
-        updateNotification("Connecting")
+        updateNotification(getString(R.string.notification_connecting))
 
         try {
             launch { heartbeatLoop(transport, circuits) }
@@ -133,7 +146,13 @@ class ExitNodeService : Service() {
                     registered = false,
                     activeControlNetwork = NetworkKind.NONE,
                     activeCircuits = 0,
-                    statusMessage = if (preferences.current.enabled) "Disconnected" else "Stopped",
+                    statusMessage = getString(
+                        if (preferences.current.enabled) {
+                            R.string.status_disconnected
+                        } else {
+                            R.string.status_stopped
+                        },
+                    ),
                 )
             }
         }
@@ -154,16 +173,23 @@ class ExitNodeService : Service() {
         circuits: CircuitManager,
     ) {
         val config = preferences.current
-        val control = networkMonitor.select(config.controlPolicy)
+        val control = networkMonitor.select(
+            config.controlPolicy,
+            PolicySelector.Scope.CONTROL,
+            config.controlAcceptsUnvalidatedWifi,
+        )
         if (control == null) {
             RuntimeStore.update {
                 it.copy(
                     registered = false,
-                    statusMessage = "Waiting for ${config.controlPolicy.label}",
+                    statusMessage = getString(
+                        R.string.status_waiting_for,
+                        config.controlPolicy.label,
+                    ),
                     activeControlNetwork = NetworkKind.NONE,
                 )
             }
-            updateNotification("Waiting for network")
+            updateNotification(getString(R.string.notification_waiting_network))
             return
         }
         val inventory = networkMonitor.inventory.value
@@ -193,7 +219,7 @@ class ExitNodeService : Service() {
                 it.copy(
                     running = true,
                     registered = true,
-                    statusMessage = "Online",
+                    statusMessage = getString(R.string.status_online),
                     activeControlNetwork = control.kind,
                     activeCircuits = circuits.activeCount,
                     bytesUp = circuits.bytesUp,
@@ -202,19 +228,21 @@ class ExitNodeService : Service() {
                     lastError = "",
                 )
             }
-            updateNotification("${control.kind.label} control · ${circuits.activeCount} circuits")
+            updateNotification(
+                getString(R.string.notification_online, control.kind.label, circuits.activeCount),
+            )
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
             RuntimeStore.update {
                 it.copy(
                     registered = false,
-                    statusMessage = "Heartbeat failed",
+                    statusMessage = getString(R.string.status_heartbeat_failed),
                     activeControlNetwork = control.kind,
                     lastError = error.message ?: error.javaClass.simpleName,
                 )
             }
-            updateNotification("Heartbeat failed")
+            updateNotification(getString(R.string.notification_degraded))
         }
     }
 
@@ -225,11 +253,18 @@ class ExitNodeService : Service() {
         var backoffMs = 1_000L
         while (currentCoroutineContext().isActive && preferences.current.enabled) {
             val config = preferences.current
-            val control = networkMonitor.select(config.controlPolicy)
+            val control = networkMonitor.select(
+                config.controlPolicy,
+                PolicySelector.Scope.CONTROL,
+                config.controlAcceptsUnvalidatedWifi,
+            )
             if (control == null) {
                 RuntimeStore.update {
                     it.copy(
-                        statusMessage = "Waiting for ${config.controlPolicy.label}",
+                        statusMessage = getString(
+                            R.string.status_waiting_for,
+                            config.controlPolicy.label,
+                        ),
                         activeControlNetwork = NetworkKind.NONE,
                     )
                 }
@@ -255,7 +290,7 @@ class ExitNodeService : Service() {
                 RuntimeStore.update {
                     it.copy(
                         registered = false,
-                        statusMessage = "Control reconnecting",
+                        statusMessage = getString(R.string.status_control_reconnecting),
                         lastError = error.message ?: error.javaClass.simpleName,
                     )
                 }
@@ -271,7 +306,9 @@ class ExitNodeService : Service() {
             "close" -> circuits.close(command.circuitId)
             "policy_update" -> {
                 preferences.applyRemotePolicies(command.controlPolicy, command.exitPolicy)
-                RuntimeStore.update { it.copy(statusMessage = "Policies updated") }
+                RuntimeStore.update {
+                    it.copy(statusMessage = getString(R.string.status_policies_updated))
+                }
             }
         }
     }
@@ -338,7 +375,7 @@ class ExitNodeService : Service() {
         )
         return Notification.Builder(this, NOTIFICATION_CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Pocket Exit")
+            .setContentTitle(getString(R.string.app_name))
             .setContentText(message)
             .setContentIntent(pendingIntent)
             .setOngoing(true)

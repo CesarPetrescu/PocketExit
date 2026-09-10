@@ -7,6 +7,7 @@ import com.photonspark.pocketexit.data.RuntimeStore
 import com.photonspark.pocketexit.network.CronetTransport
 import com.photonspark.pocketexit.network.DestinationAcl
 import com.photonspark.pocketexit.network.NetworkMonitor
+import com.photonspark.pocketexit.network.PolicySelector
 import com.photonspark.pocketexit.network.WebSocketTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -295,9 +296,13 @@ class CircuitManager(
     }
 
     private fun controlNetwork(): NetworkMonitor.BoundNetwork {
-        val policy = preferences.current.controlPolicy
-        return networkMonitor.select(policy)
-            ?: throw IOException("No validated network satisfies control policy ${policy.wire}")
+        val config = preferences.current
+        val policy = config.controlPolicy
+        return networkMonitor.select(
+            policy,
+            PolicySelector.Scope.CONTROL,
+            config.controlAcceptsUnvalidatedWifi,
+        ) ?: throw IOException("No usable network satisfies control policy ${policy.wire}")
     }
 
     private suspend fun postStatus(
@@ -312,7 +317,11 @@ class CircuitManager(
             if (required) throw IOException("Agent token is missing")
             return
         }
-        val control = selectedControl ?: networkMonitor.select(preferences.current.controlPolicy)
+        val control = selectedControl ?: networkMonitor.select(
+            preferences.current.controlPolicy,
+            PolicySelector.Scope.CONTROL,
+            preferences.current.controlAcceptsUnvalidatedWifi,
+        )
         if (control == null) {
             if (required) throw IOException("No control network is available")
             return

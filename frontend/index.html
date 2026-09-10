@@ -21,94 +21,153 @@
       </div>
       <div class="header-actions">
         <span id="connection-state" class="status neutral" aria-live="polite">Not connected</span>
-        <button id="refresh" class="secondary" type="button">Refresh</button>
+        <button id="refresh" class="secondary" type="button" hidden>Refresh</button>
+        <button id="sign-out" class="secondary" type="button" hidden>Sign out</button>
       </div>
     </div>
-    <form id="auth-form" class="access-bar">
-      <div>
-        <strong>Control-plane access</strong>
-        <span>Token stays in this browser tab.</span>
-      </div>
-      <div class="auth-row">
-        <label class="sr-only" for="admin-token">Admin token</label>
-        <input id="admin-token" type="password" autocomplete="off" placeholder="Admin token" required>
-        <button id="save-token" class="primary" type="submit">Connect</button>
-      </div>
-    </form>
   </header>
 
   <main id="main">
-    <section class="dashboard-intro" aria-labelledby="overview-title">
+    <section id="welcome" class="welcome-panel" aria-labelledby="welcome-title" hidden>
       <div>
-        <p class="eyebrow">FLEET OVERVIEW</p>
-        <h2 id="overview-title">Network pulse</h2>
-        <p class="section-copy">Live health and traffic across every Android exit node.</p>
+        <p class="eyebrow">CONTROL PLANE ACCESS</p>
+        <h2 id="welcome-title">Connect this dashboard</h2>
+        <p id="welcome-copy" class="section-copy">Checking how this server is running.</p>
       </div>
-      <span id="last-sync" class="sync-state">Waiting for connection</span>
+      <form id="auth-form" class="welcome-form">
+        <label for="admin-token">Admin token</label>
+        <div class="auth-row">
+          <input id="admin-token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the admin token" required>
+          <button id="save-token" class="primary" type="submit">Connect</button>
+        </div>
+        <p class="welcome-hint">The token stays in this browser tab, is never written to disk, and is forgotten when the tab closes.</p>
+      </form>
     </section>
 
-    <section class="overview-grid" aria-label="System summary">
-      <article class="summary-card"><span>Nodes</span><strong id="node-count">—</strong><small>registered</small></article>
-      <article class="summary-card"><span>Online</span><strong id="online-count">—</strong><small>healthy now</small></article>
-      <article class="summary-card"><span>Open circuits</span><strong id="circuit-count">—</strong><small>active + pending</small></article>
-      <article class="summary-card"><span>Total traffic</span><strong id="traffic-total">—</strong><small>lifetime relay</small></article>
-      <article class="traffic-panel">
-        <div class="traffic-heading">
-          <div>
-            <span class="panel-label">LIVE THROUGHPUT</span>
-            <strong id="traffic-rate">0 B/s</strong>
-          </div>
-          <div class="chart-legend" aria-hidden="true">
-            <span class="download">Down</span><span class="upload">Up</span>
+    <div id="dashboard" hidden>
+      <section id="pairing" class="pairing-panel" aria-labelledby="pairing-title" hidden>
+        <div>
+          <p class="eyebrow">PAIR A PHONE</p>
+          <h2 id="pairing-title">Add an exit node</h2>
+          <p class="section-copy">Install PocketExit on the phone, then scan a pairing code with its ordinary camera app. No token to type, no account to create.</p>
+        </div>
+
+        <div id="pairing-idle" class="pairing-idle">
+          <button id="pairing-mint" class="primary cta-button" type="button">Generate pairing code</button>
+          <p class="pairing-hint">The code is valid for ten minutes, pairs one phone, and is destroyed the moment it is used.</p>
+        </div>
+
+        <div id="pairing-active" class="pairing-active" hidden>
+          <figure class="qr-frame">
+            <img id="pairing-qr" alt="Pairing QR code. Scan it with the phone's camera app.">
+          </figure>
+          <div class="pairing-detail">
+            <p class="panel-label">SCAN THIS WITH THE PHONE</p>
+            <p id="pairing-code" class="pairing-code">————</p>
+            <p id="pairing-countdown" class="pairing-countdown">&nbsp;</p>
+            <progress id="pairing-progress" max="600" value="600" aria-hidden="true"></progress>
+            <p class="pairing-hint">Point the phone's camera at the code. Android opens PocketExit, which shows the server it is about to trust before anything is stored. The phone appears in the fleet below once it has paired.</p>
+            <div class="pairing-controls">
+              <button id="pairing-regenerate" class="secondary" type="button">Generate a new code</button>
+              <button id="pairing-cancel" class="danger-button" type="button">Cancel code</button>
+            </div>
           </div>
         </div>
-        <canvas id="traffic-chart" role="img" aria-describedby="traffic-description"></canvas>
-        <p id="traffic-description" class="sr-only">No traffic samples yet.</p>
-        <div class="chart-axis"><span>108 seconds ago</span><span>Now</span></div>
-      </article>
-    </section>
 
-    <section class="section-heading">
-      <div>
-        <p class="eyebrow">EXIT FLEET</p>
-        <h2>Android nodes</h2>
-        <p class="section-copy">Availability, routing policy, and device health in one view.</p>
-      </div>
-    </section>
-    <section id="nodes" class="node-grid" aria-live="polite" aria-busy="false">
-      <div class="empty-state">Enter the admin token to load nodes.</div>
-    </section>
+        <div class="server-facts">
+          <div class="fact">
+            <span>SOCKS5 proxy</span>
+            <code id="fact-socks">—</code>
+            <p id="fact-socks-note" class="fact-note">Point your browser or shell at this address.</p>
+            <button class="copy-button" type="button" data-copy="fact-socks">Copy</button>
+          </div>
+          <div class="fact">
+            <span>Certificate pin</span>
+            <code id="fact-pin">—</code>
+            <p class="fact-note">SHA-256 of the server's public key, base64url. The phone carries this in the QR and refuses any other certificate.</p>
+            <button class="copy-button" type="button" data-copy="fact-pin">Copy</button>
+          </div>
+          <div class="fact">
+            <span>Server URL</span>
+            <code id="fact-server">—</code>
+            <p class="fact-note">The origin phones dial. It must be reachable from the phone's network.</p>
+            <button class="copy-button" type="button" data-copy="fact-server">Copy</button>
+          </div>
+        </div>
+      </section>
 
-    <section class="section-heading circuits-heading">
-      <div>
-        <p class="eyebrow">LIVE DATA PLANE</p>
-        <h2>Circuits</h2>
+      <section class="dashboard-intro" aria-labelledby="overview-title">
+        <div>
+          <p class="eyebrow">FLEET OVERVIEW</p>
+          <h2 id="overview-title">Network pulse</h2>
+          <p class="section-copy">Live health and traffic across every Android exit node.</p>
+        </div>
+        <span id="last-sync" class="sync-state">Waiting for connection</span>
+      </section>
+
+      <section class="overview-grid" aria-label="System summary">
+        <article class="summary-card"><span>Nodes</span><strong id="node-count">—</strong><small>registered</small></article>
+        <article class="summary-card"><span>Online</span><strong id="online-count">—</strong><small>healthy now</small></article>
+        <article class="summary-card"><span>Open circuits</span><strong id="circuit-count">—</strong><small>active + pending</small></article>
+        <article class="summary-card"><span>Total traffic</span><strong id="traffic-total">—</strong><small>lifetime relay</small></article>
+        <article class="traffic-panel">
+          <div class="traffic-heading">
+            <div>
+              <span class="panel-label">LIVE THROUGHPUT</span>
+              <strong id="traffic-rate">0 B/s</strong>
+            </div>
+            <div class="chart-legend" aria-hidden="true">
+              <span class="download">Down</span><span class="upload">Up</span>
+            </div>
+          </div>
+          <canvas id="traffic-chart" role="img" aria-describedby="traffic-description"></canvas>
+          <p id="traffic-description" class="sr-only">No traffic samples yet.</p>
+          <div class="chart-axis"><span>108 seconds ago</span><span>Now</span></div>
+        </article>
+      </section>
+
+      <section class="section-heading">
+        <div>
+          <p class="eyebrow">EXIT FLEET</p>
+          <h2>Android nodes</h2>
+          <p class="section-copy">Availability, routing policy, and device health in one view.</p>
+        </div>
+      </section>
+      <section id="nodes" class="node-grid" aria-live="polite" aria-busy="false">
+        <div class="empty-state">Loading nodes.</div>
+      </section>
+
+      <section class="section-heading circuits-heading">
+        <div>
+          <p class="eyebrow">LIVE DATA PLANE</p>
+          <h2>Circuits</h2>
+        </div>
+        <label class="compact-control">Show
+          <select id="circuit-filter">
+            <option value="active">Active</option>
+            <option value="all">All</option>
+          </select>
+        </label>
+      </section>
+      <div class="table-shell">
+        <table>
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Node</th>
+              <th>Protocol</th>
+              <th>Target</th>
+              <th>Exit</th>
+              <th>Traffic</th>
+              <th>Age</th>
+              <th><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="circuits">
+            <tr><td colspan="8" class="empty-cell">No circuit data.</td></tr>
+          </tbody>
+        </table>
       </div>
-      <label class="compact-control">Show
-        <select id="circuit-filter">
-          <option value="active">Active</option>
-          <option value="all">All</option>
-        </select>
-      </label>
-    </section>
-    <div class="table-shell">
-      <table>
-        <thead>
-          <tr>
-            <th>Status</th>
-            <th>Node</th>
-            <th>Protocol</th>
-            <th>Target</th>
-            <th>Exit</th>
-            <th>Traffic</th>
-            <th>Age</th>
-            <th><span class="sr-only">Actions</span></th>
-          </tr>
-        </thead>
-        <tbody id="circuits">
-          <tr><td colspan="8" class="empty-cell">No circuit data.</td></tr>
-        </tbody>
-      </table>
     </div>
   </main>
 
@@ -127,6 +186,20 @@
       <img id="pair-qr" alt="PocketExit agent configuration QR code">
       <p class="pair-warning">Scan with the phone's normal camera, verify the server and node in PocketExit, then confirm. This QR contains that node's bearer token; close it when finished.</p>
       <button id="pair-close" class="primary" type="button">Done</button>
+    </div>
+  </dialog>
+  <dialog id="unpair-dialog" aria-labelledby="unpair-title">
+    <div class="pair-dialog-content">
+      <div>
+        <p class="eyebrow">REVOKE ACCESS</p>
+        <h2 id="unpair-title">Unpair this phone</h2>
+        <p id="unpair-detail" class="section-copy"></p>
+      </div>
+      <p id="unpair-note" class="pair-warning"></p>
+      <div class="dialog-actions">
+        <button id="unpair-cancel" class="secondary" type="button">Keep it</button>
+        <button id="unpair-confirm" class="danger-button" type="button">Unpair</button>
+      </div>
     </div>
   </dialog>
   <div id="toast" role="status" aria-live="polite"></div>

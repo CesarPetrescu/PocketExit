@@ -17,6 +17,12 @@ printf '%s\n' '== Go unit and integration tests =='
 printf '%s\n' '== Backend process smoke test =='
 "$ROOT/scripts/smoke-backend.sh"
 
+printf '%s\n' '== Personal-mode process smoke test =='
+"$ROOT/.github/e2e/personal-smoke.sh"
+
+printf '%s\n' '== SOCKS5 end-to-end =='
+python3 "$ROOT/.github/e2e/socks-e2e.py"
+
 printf '%s\n' '== Frontend syntax =='
 node --check "$ROOT/frontend/app.js"
 

@@ -1,0 +1,11 @@
+# Findings reviewed and dismissed, by gitleaks fingerprint
+# (commit:path:rule:line). Every entry needs a reason.
+#
+# A documentation example. PROTOCOL.md showed a sample /pair/v1/claim response
+# whose agent_token was a realistically shaped 43-character base64url string,
+# which is indistinguishable from a real credential to an entropy rule. It was
+# never a live token: the pairing protocol mints tokens per phone at runtime
+# and none is ever committed. The example now reads
+# "example-agent-token-not-a-real-credential-0", so only this historical commit
+# still carries the old value, and history is not rewritten on a shared branch.
+8611539415992f9444dddbfbbbf49021ee314f88:PROTOCOL.md:generic-api-key:77

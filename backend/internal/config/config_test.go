@@ -108,3 +108,67 @@ func TestLoadRequiresAgentTokenMap(t *testing.T) {
 		t.Fatal("expected AGENT_TOKENS_JSON to be required")
 	}
 }
+
+func validPersonalOptions() PersonalOptions {
+	return PersonalOptions{
+		HTTPAddr:      "0.0.0.0:8443",
+		SOCKSAddr:     "127.0.0.1:1080",
+		AdminToken:    "admin-test-token-2026",
+		SOCKSUsername: "proxy",
+		SOCKSPassword: "proxy-test-password-2026",
+		AuditLogPath:  "/tmp/pocketexit-personal-audit-test.jsonl",
+		FrontendDir:   "/srv/pocketexit/frontend",
+		ServerURL:     "https://192.168.1.50:8443",
+		ServerName:    "cesar-laptop",
+		CertPin:       "0uZ9nBRTn0hM1s5Vd4xJ1cV0v2Q3s4T5u6W7x8Y9z0A",
+	}
+}
+
+func TestPersonalNeedsNoEnvironment(t *testing.T) {
+	// Personal mode reads none of the server-mode variables: the credentials
+	// come from state.json and the tokens are minted by pairing.
+	t.Setenv("AGENT_TOKENS_JSON", "")
+	t.Setenv("ADMIN_TOKEN", "")
+	t.Setenv("SOCKS_PASSWORD", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected server mode to still require AGENT_TOKENS_JSON")
+	}
+	cfg, err := Personal(validPersonalOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mode != ModePersonal || len(cfg.AgentTokens) != 0 {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
+	if cfg.ServerOrigin() != "https://192.168.1.50:8443" {
+		t.Fatalf("unexpected server origin %q", cfg.ServerOrigin())
+	}
+	if cfg.SOCKSAddr != "127.0.0.1:1080" || cfg.UDPBindHost != "127.0.0.1" || cfg.AllowPrivateDestinations {
+		t.Fatalf("unexpected personal defaults: %+v", cfg)
+	}
+}
+
+func TestPersonalRejectsUnusableValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*PersonalOptions)
+	}{
+		{name: "short admin token", mutate: func(o *PersonalOptions) { o.AdminToken = "short" }},
+		{name: "short SOCKS password", mutate: func(o *PersonalOptions) { o.SOCKSPassword = "short" }},
+		{name: "relative audit log", mutate: func(o *PersonalOptions) { o.AuditLogPath = "audit.jsonl" }},
+		{name: "plaintext server URL", mutate: func(o *PersonalOptions) { o.ServerURL = "http://192.168.1.50:8443" }},
+		{name: "server URL with a path", mutate: func(o *PersonalOptions) { o.ServerURL = "https://192.168.1.50:8443/pair" }},
+		{name: "server URL with userinfo", mutate: func(o *PersonalOptions) { o.ServerURL = "https://user@192.168.1.50:8443" }},
+		{name: "server URL without a host", mutate: func(o *PersonalOptions) { o.ServerURL = "https://" }},
+		{name: "oversized server name", mutate: func(o *PersonalOptions) { o.ServerName = strings.Repeat("n", 65) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options := validPersonalOptions()
+			test.mutate(&options)
+			if _, err := Personal(options); err == nil {
+				t.Fatal("expected the configuration to be rejected")
+			}
+		})
+	}
+}

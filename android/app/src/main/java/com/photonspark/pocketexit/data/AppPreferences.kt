@@ -31,10 +31,21 @@ class AppPreferences(context: Context) : SharedPreferences.OnSharedPreferenceCha
         preferences.registerOnSharedPreferenceChangeListener(this)
     }
 
-    fun save(config: AgentConfig) {
-        val normalizedNodeId = sanitizeNodeId(config.nodeId)
+    /**
+     * [sanitizeNodeId] rewrites the node id into the characters the registry
+     * accepts, which is right for an id somebody typed into the settings form.
+     * An id the server assigned at pairing is stored exactly as it arrived:
+     * rewriting that one would leave this phone calling itself something the
+     * server has never heard of, and the claim already rejects an id it cannot
+     * store verbatim.
+     */
+    fun save(config: AgentConfig, sanitizeNodeId: Boolean = true) {
+        val normalizedNodeId = if (sanitizeNodeId) sanitized(config.nodeId) else config.nodeId.trim()
         preferences.edit()
             .putString(KEY_SERVER_URL, config.normalizedServerUrl)
+            // The pin is a public hash, not a secret, so it lives beside the
+            // server URL rather than in the Keystore-backed secret store.
+            .putString(KEY_PIN, config.pin.trim())
             .putString(KEY_NODE_ID, normalizedNodeId)
             .putString(KEY_DEVICE_NAME, config.deviceName.trim().ifBlank { Build.MODEL })
             .putString(KEY_CONTROL_POLICY, config.controlPolicy.wire)
@@ -85,6 +96,7 @@ class AppPreferences(context: Context) : SharedPreferences.OnSharedPreferenceCha
         ),
         enabled = preferences.getBoolean(KEY_ENABLED, false),
         autoStart = preferences.getBoolean(KEY_AUTO_START, false),
+        pin = preferences.getString(KEY_PIN, "").orEmpty(),
     )
 
     private fun ensureDefaults() {
@@ -100,12 +112,12 @@ class AppPreferences(context: Context) : SharedPreferences.OnSharedPreferenceCha
     }
 
     private fun defaultNodeId(): String {
-        val model = sanitizeNodeId(Build.MODEL.lowercase(Locale.US))
+        val model = sanitized(Build.MODEL.lowercase(Locale.US))
         val suffix = UUID.randomUUID().toString().take(8)
         return "${model.ifBlank { "android" }}-$suffix"
     }
 
-    private fun sanitizeNodeId(value: String): String = value.trim()
+    private fun sanitized(value: String): String = value.trim()
         .replace(Regex("[^A-Za-z0-9._-]"), "-")
         .trim('-')
         .take(64)
@@ -115,6 +127,7 @@ class AppPreferences(context: Context) : SharedPreferences.OnSharedPreferenceCha
         private const val FILE_NAME = "pocket_exit"
         private const val DEFAULT_SERVER_URL = "https://proxy.example.com"
         private const val KEY_SERVER_URL = "server_url"
+        private const val KEY_PIN = "server_pin"
         private const val KEY_NODE_ID = "node_id"
         private const val KEY_DEVICE_NAME = "device_name"
         private const val KEY_CONTROL_POLICY = "control_policy"

@@ -121,6 +121,30 @@ func (r *Registry) NextCommand(ctx context.Context, nodeID string) (model.Comman
 	}
 }
 
+// Remove drops a node's record entirely. Personal mode calls this when a phone
+// is unpaired: disabling the record instead would leave it in the map for the
+// life of the process, so re-pairing the same node id would produce a phone
+// that authenticates but is permanently disabled, and every claim -- each of
+// which mints a fresh random id -- would leak a record and its command channel.
+func (r *Registry) Remove(nodeID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.records[nodeID]
+	if !ok {
+		return ErrNodeNotFound
+	}
+	delete(r.records, nodeID)
+	// Drain whatever the scheduler queued so a blocked QueueCommand for this
+	// node cannot wait on a channel nobody will ever read again.
+	for {
+		select {
+		case <-rec.commands:
+		default:
+			return nil
+		}
+	}
+}
+
 func (r *Registry) Get(nodeID string) (model.Node, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
