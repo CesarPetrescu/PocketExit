@@ -99,7 +99,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
-    implementation("com.squareup.okhttp3:okhttp:5.3.0")
+    implementation("com.squareup.okhttp3:okhttp:5.5.0")
 
     // Embedded Chromium networking stack: HTTP/3 over QUIC on supported paths.
     implementation("org.chromium.net:cronet-embedded:143.7445.0")
