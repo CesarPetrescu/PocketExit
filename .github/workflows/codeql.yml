@@ -5,11 +5,6 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  schedule:
-    # Monday morning, so a new query pack is applied to the default branch
-    # without waiting for someone to open a pull request.
-    - cron: "27 5 * * 1"
-
 permissions:
   contents: read
 
